@@ -19,7 +19,7 @@ import {
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from './finish.ts'
-import { assertPartLimit } from './part-limit.ts'
+import { assertPartLimit, PartLimitError } from './part-limit.ts'
 import {
   resolveRetryResponseBodyFailures,
   resolveRetryUploadConnectionFaults,
@@ -388,7 +388,7 @@ export function createWriteStream(
     startPartWithAcquiredSlot(data, partNumber)
   }
 
-  const writable = new WritableStream<Uint8Array>({
+  const writable = new UploadWritableStream(() => errored, {
     start(controller): void {
       streamController = controller
     },
@@ -512,6 +512,48 @@ export function createWriteStream(
   })
 
   return { writable, done }
+}
+
+// Native close() replaces a stored stream error with TypeError once the stream
+// is fully errored. Preserve the SDK part-limit reason for subsequent closes.
+class UploadWritableStream extends WritableStream<Uint8Array> {
+  readonly #getError: () => Error | null
+
+  constructor(getError: () => Error | null, sink: UnderlyingSink<Uint8Array>) {
+    super(sink)
+    this.#getError = getError
+  }
+
+  override close(): Promise<void> {
+    const error = this.#getError()
+    if (!this.locked && error instanceof PartLimitError) return Promise.reject(error)
+    return super.close()
+  }
+
+  override getWriter(): WritableStreamDefaultWriter<Uint8Array> {
+    return new UploadStreamWriter(this, this.#getError)
+  }
+}
+
+class UploadStreamWriter extends WritableStreamDefaultWriter<Uint8Array> {
+  readonly #getError: () => Error | null
+  #released = false
+
+  constructor(stream: WritableStream<Uint8Array>, getError: () => Error | null) {
+    super(stream)
+    this.#getError = getError
+  }
+
+  override close(): Promise<void> {
+    const error = this.#getError()
+    if (!this.#released && error instanceof PartLimitError) return Promise.reject(error)
+    return super.close()
+  }
+
+  override releaseLock(): void {
+    super.releaseLock()
+    this.#released = true
+  }
 }
 
 function cleanupWriteStreamOptions(options: CreateWriteStreamOptions): {

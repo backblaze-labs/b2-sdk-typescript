@@ -114,18 +114,11 @@ describe('stream part limit', () => {
     )
 
     // The stream cannot represent 10,001 parts, so it must reject, and say why.
-    expect(doneOutcome, 'done must reject an oversized stream').toBeInstanceOf(Error)
-    expect((doneOutcome as Error).message).toMatch(PART_LIMIT_MESSAGE)
-    if (writeOutcome !== undefined)
-      expect((writeOutcome as Error).message).toMatch(PART_LIMIT_MESSAGE)
-    if (closeOutcome !== undefined) {
-      // Closing an already-errored Web WritableStream may report invalid state.
-      expect((closeOutcome as Error).message).toMatch(
-        writeOutcome === undefined
-          ? PART_LIMIT_MESSAGE
-          : /10[,_ ]?000|too many parts|part.*limit|invalid state/i,
-      )
-    }
+    expect(writeOutcome).toBeInstanceOf(RangeError)
+    expect((writeOutcome as Error).message).toBe('A large file cannot exceed 10000 parts.')
+    expect(closeOutcome, 'close must preserve the part-limit reason').toBe(writeOutcome)
+    expect(doneOutcome, 'done must preserve the part-limit reason').toBe(writeOutcome)
+    await expect(writer.closed).rejects.toBe(writeOutcome)
     const partNumbers = seen
       .filter((r) => r.url.includes('b2_upload_part'))
       .map((r) => Number(r.headers?.['X-Bz-Part-Number']))
@@ -134,6 +127,40 @@ describe('stream part limit', () => {
       'a part number above 10,000 was uploaded',
     ).toBeLessThanOrEqual(10_000)
   }, 60_000)
+
+  it('preserves the part-limit reason when closing the unlocked stream', async () => {
+    const { bucket } = await makeStreamClient(1)
+    const { writable, done } = bucket.file('c6-unlocked.bin').createWriteStream({ partSize: 1 })
+    const writer = writable.getWriter()
+    const reason = await writer.write(deterministicBytes(10_001)).catch((error: unknown) => error)
+    expect(reason).toBeInstanceOf(RangeError)
+    expect((reason as Error).message).toMatch(PART_LIMIT_MESSAGE)
+    writer.releaseLock()
+
+    // A released writer still reports its own invalid usage, even after a new writer acquires it.
+    const nextWriter = writable.getWriter()
+    await expect(writer.close()).rejects.toBeInstanceOf(TypeError)
+    await expect(writable.close()).rejects.toBeInstanceOf(TypeError)
+    await expect(nextWriter.close()).rejects.toBe(reason)
+    nextWriter.releaseLock()
+    await expect(writable.close()).rejects.toBe(reason)
+    await expect(done).rejects.toBe(reason)
+  })
+
+  it('preserves the part-limit reason when close is queued with the oversized write', async () => {
+    const { bucket } = await makeStreamClient(1)
+    const { writable, done } = bucket.file('c6-queued-close.bin').createWriteStream({ partSize: 1 })
+    const writer = writable.getWriter()
+    const write = writer.write(deterministicBytes(10_001))
+    const close = writer.close()
+    const [writeResult, closeResult, doneResult] = await Promise.allSettled([write, close, done])
+    expect(writeResult.status).toBe('rejected')
+    if (writeResult.status !== 'rejected') throw new Error('oversized write unexpectedly succeeded')
+    expect(writeResult.reason).toBeInstanceOf(RangeError)
+    expect(writeResult.reason.message).toMatch(PART_LIMIT_MESSAGE)
+    expect(closeResult).toEqual({ status: 'rejected', reason: writeResult.reason })
+    expect(doneResult).toEqual({ status: 'rejected', reason: writeResult.reason })
+  })
 
   it('still accepts a stream of exactly 10,000 parts', async () => {
     // Boundary control: an implementation that rejects every large stream must not pass.
