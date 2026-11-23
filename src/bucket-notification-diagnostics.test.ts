@@ -9,15 +9,13 @@ import { jsonErrorResponse, makeClient } from './test-utils/index.ts'
  * replace-all notification call. A rule can carry an HMAC signing secret and custom
  * header values, which must never reach the SDK's diagnostic output or an exception.
  *
- * One test per (input, surface, path) so each test asserts exactly the cell it names:
- * inputs are the signing secret and a custom header value; surfaces are SDK diagnostic
- * output and exception text; paths are success, failure before authorization, API
- * error, and local validation error.
- *
- * The SDK has no debug-tracing facility of its own, so "SDK debug trace" here means
- * everything the SDK writes through `console` while the call runs. On the success path
- * nothing is thrown, so the exception cells assert that no exception text can carry the
- * secret (the call does not throw), which is weaker than the failure-path cells.
+ * One test per cell so each test asserts exactly the cell it names. Inputs are the
+ * signing secret and a custom header value. Console output (everything the SDK writes
+ * through `console`; the SDK has no debug-tracing facility of its own) is checked on four
+ * paths: success, failure before authorization, API error and a simulator-rejected
+ * validation error. Exception text is checked on the three paths that throw: the success
+ * path throws nothing, so it has no exception cells; a leak on that path would show up in
+ * the console cells. That makes 8 console cells plus 6 exception cells.
  */
 
 const SIGNING_SECRET = 'hmac-signing-secret-must-not-leak-4b1e'
@@ -121,6 +119,15 @@ afterEach(() => {
 })
 
 describe('setNotificationRules keeps sensitive inputs out of diagnostics', () => {
+  // Notes on the cells below:
+  // - Pre-authorization: the call fails before any code that holds the rules is reached,
+  //   so the exception cells there cannot see a leak from later code; only the console
+  //   cells (which watch the whole call) would catch one.
+  // - API error: the canned 503 does not echo the request, so these cells prove the SDK
+  //   adds no secret to the error itself.
+  // - Validation error: the empty rule name is rejected by the simulator as a server 400,
+  //   not by the SDK's local validation.
+
   // ── signing secret × SDK debug trace ─────────────────────────────────────
 
   it('signing secret stays out of SDK debug trace on the success path', async () => {
@@ -148,7 +155,7 @@ describe('setNotificationRules keeps sensitive inputs out of diagnostics', () =>
     expect(trace.output()).not.toContain(SIGNING_SECRET)
   })
 
-  it('signing secret stays out of SDK debug trace on the validation error path', async () => {
+  it('signing secret stays out of SDK debug trace on the simulator-rejected validation error path', async () => {
     const { bucket } = await setup()
     const trace = captureConsole()
     await expect(bucket.setNotificationRules([{ ...sensitiveRule(), name: '' }])).rejects.toThrow()
@@ -183,7 +190,7 @@ describe('setNotificationRules keeps sensitive inputs out of diagnostics', () =>
     expect(trace.output()).not.toContain(HEADER_VALUE)
   })
 
-  it('custom header value stays out of SDK debug trace on the validation error path', async () => {
+  it('custom header value stays out of SDK debug trace on the simulator-rejected validation error path', async () => {
     const { bucket } = await setup()
     const trace = captureConsole()
     await expect(bucket.setNotificationRules([{ ...sensitiveRule(), name: '' }])).rejects.toThrow()
@@ -192,13 +199,6 @@ describe('setNotificationRules keeps sensitive inputs out of diagnostics', () =>
   })
 
   // ── signing secret × exception ───────────────────────────────────────────
-
-  it('signing secret stays out of exception text on the success path', async () => {
-    const { bucket } = await setup()
-    const error = await thrownBy(bucket.setNotificationRules([sensitiveRule()]))
-    expect(error).toBeUndefined()
-    expect(exceptionText(error)).not.toContain(SIGNING_SECRET)
-  })
 
   it('signing secret stays out of exception text on the pre-authorization path', async () => {
     const { client, bucket } = await setup()
@@ -215,7 +215,7 @@ describe('setNotificationRules keeps sensitive inputs out of diagnostics', () =>
     expect(exceptionText(error)).not.toContain(SIGNING_SECRET)
   })
 
-  it('signing secret stays out of exception text on the validation error path', async () => {
+  it('signing secret stays out of exception text on the simulator-rejected validation error path', async () => {
     const { bucket } = await setup()
     const error = await thrownBy(bucket.setNotificationRules([{ ...sensitiveRule(), name: '' }]))
     expect(error).toBeInstanceOf(Error)
@@ -223,13 +223,6 @@ describe('setNotificationRules keeps sensitive inputs out of diagnostics', () =>
   })
 
   // ── custom header × exception ────────────────────────────────────────────
-
-  it('custom header value stays out of exception text on the success path', async () => {
-    const { bucket } = await setup()
-    const error = await thrownBy(bucket.setNotificationRules([sensitiveRule()]))
-    expect(error).toBeUndefined()
-    expect(exceptionText(error)).not.toContain(HEADER_VALUE)
-  })
 
   it('custom header value stays out of exception text on the pre-authorization path', async () => {
     const { client, bucket } = await setup()
@@ -246,7 +239,7 @@ describe('setNotificationRules keeps sensitive inputs out of diagnostics', () =>
     expect(exceptionText(error)).not.toContain(HEADER_VALUE)
   })
 
-  it('custom header value stays out of exception text on the validation error path', async () => {
+  it('custom header value stays out of exception text on the simulator-rejected validation error path', async () => {
     const { bucket } = await setup()
     const error = await thrownBy(bucket.setNotificationRules([{ ...sensitiveRule(), name: '' }]))
     expect(error).toBeInstanceOf(Error)
