@@ -13,8 +13,10 @@ on:
     workflows: [Review submitted]
     types: [completed]
 
+# Keyed by head commit, the thing the status is posted on, so both triggers share
+# one queue per commit and a newer evaluation always finishes last.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
   cancel-in-progress: true
 
 permissions:
@@ -43,7 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_PR: ${{ github.event.pull_request.number }}
-          REVIEWED_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
           STATUS_CONTEXT: review-risk
         run: |
           set -euo pipefail
@@ -54,8 +56,13 @@ jobs:
           prs=$EVENT_PR
           if [ -z "$prs" ]; then
             # workflow_run: find the open PRs whose head is the reviewed commit.
-            prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --search "$REVIEWED_SHA" \
-              --json number,headRefOid --jq ".[] | select(.headRefOid == \"$REVIEWED_SHA\") | .number")
+            # A failed lookup must not leave an earlier success standing on this commit.
+            prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --search "$HEAD_SHA" \
+              --json number,headRefOid --jq ".[] | select(.headRefOid == \"$HEAD_SHA\") | .number") || {
+              gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state=error \
+                -f context="$STATUS_CONTEXT" -f description="could not find the PR; re-run Review risk"
+              exit 1
+            }
           fi
           for pr in $prs; do
             PR_NUMBER=$pr node scripts/review-risk.mjs

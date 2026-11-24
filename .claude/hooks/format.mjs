@@ -4,7 +4,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { relative, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 
 try {
   const input = JSON.parse(readFileSync(0, 'utf8'))
@@ -12,11 +12,13 @@ try {
   const root = process.env.CLAUDE_PROJECT_DIR ?? process.cwd()
   const rel = file ? relative(root, resolve(root, file)) : ''
   if (rel && !rel.startsWith('..') && /\.(c|m)?(j|t)sx?$|\.jsonc?$/.test(rel)) {
-    execFileSync('pnpm', ['exec', 'biome', 'format', '--write', '--no-errors-on-unmatched', rel], {
-      cwd: root,
-      stdio: 'ignore',
-      shell: process.platform === 'win32',
-    })
+    // Node runs Biome's launcher directly, with no shell, so a filename stays an argument.
+    const biome = join(root, 'node_modules/@biomejs/biome/bin/biome')
+    execFileSync(
+      process.execPath,
+      [biome, 'format', '--write', '--no-errors-on-unmatched', '--', rel],
+      { cwd: root, stdio: 'ignore' },
+    )
   }
 } catch {
   // Formatting is a convenience; `pnpm lint` in `pnpm verify` is the gate.

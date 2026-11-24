@@ -35,7 +35,16 @@ changed() {
     -e "s|^Only in $BASELINE: \(.*\)$|\1|p" \
     -e "s|^Files $BASELINE/\(.*\) and \./.* differ$|\1|p" \
     -e "s|^Symbolic links $BASELINE/\(.*\) and \./.* differ$|\1|p" \
-    -e "s|^File $BASELINE/\(.*\) is a .* while file \./.*$|\1|p" <<<"$listing"
+    -e "s|^File $BASELINE/\(.*\) is a .* while file \./.*$|\1|p" <<<"$listing" |
+    while read -r path; do
+      # A deleted directory is listed once; report each file in it so may_change
+      # is checked per file, not against the directory name.
+      if [ -d "$BASELINE/$path" ] && ! [ -L "$BASELINE/$path" ]; then
+        (cd "$BASELINE" && find "$path" ! -type d)
+      else
+        echo "$path"
+      fi
+    done
 }
 
 # New files that are not Git-ignored. With $BASELINE, git uses a fresh, empty

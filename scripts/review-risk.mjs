@@ -7,8 +7,8 @@
 //     current head commit. Only reviewers on the policy's authorizedReviewers list
 //     count, never bots, agents or the author; an approval of an older commit does
 //     not cover new commits. Needs GH_TOKEN, GITHUB_REPOSITORY and PR_NUMBER. With
-//     STATUS_CONTEXT set it posts the result as that commit status on the head
-//     commit instead of failing. The workflow runs this file from the base branch
+//     STATUS_CONTEXT and HEAD_SHA set it marks that commit's status pending, then
+//     posts the result there (or an error if evaluation fails) instead of failing. The workflow runs this file from the base branch
 //     under trusted triggers, so a PR cannot loosen or replace its own gate.
 
 import { execFileSync } from 'node:child_process'
@@ -116,16 +116,36 @@ function ghJson(path) {
   return JSON.parse(out).flat()
 }
 
-function main() {
-  const repo = process.env.GITHUB_REPOSITORY
-  const number = process.env.PR_NUMBER
-  if (!repo || !number) throw new Error('GITHUB_REPOSITORY and PR_NUMBER are required')
+// Posts the commit status `context` on `sha`; description is capped at GitHub's 140.
+function postStatus(repo, sha, context, state, description) {
+  const runUrl = process.env.GITHUB_RUN_ID
+    ? `${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`
+    : undefined
+  execFileSync(
+    'gh',
+    [
+      'api',
+      `repos/${repo}/statuses/${sha}`,
+      '-f',
+      `state=${state}`,
+      '-f',
+      `context=${context}`,
+      '-f',
+      `description=${description.slice(0, 140)}`,
+      ...(runUrl ? ['-f', `target_url=${runUrl}`] : []),
+    ],
+    { stdio: ['ignore', 'ignore', 'inherit'] },
+  )
+}
+
+function evaluate(repo, number, headSha) {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..')
   const policy = JSON.parse(readFileSync(join(root, '.github/review-policy.json'), 'utf8'))
 
   const pr = JSON.parse(
     execFileSync('gh', ['api', `repos/${repo}/pulls/${number}`], { encoding: 'utf8' }),
   )
+  if (headSha && pr.head.sha !== headSha) return { superseded: true }
   const files = ghJson(`repos/${repo}/pulls/${number}/files?per_page=100`).flatMap((f) =>
     f.previous_filename ? [f.filename, f.previous_filename] : [f.filename],
   )
@@ -151,35 +171,43 @@ function main() {
     '',
     ...reasons.map((r) => `- ${r}`),
   ]
-  console.log(lines.join('\n'))
-  if (process.env.GITHUB_STEP_SUMMARY)
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`)
-  const context = process.env.STATUS_CONTEXT
-  if (!context) {
-    if (!ok) process.exit(1)
-    return
-  }
   const description = blockers.length
     ? `${tier}: changes requested by ${blockers.join(', ')}`
     : `${tier}: ${approvers.length}/${required} human approvals`
-  const runUrl = process.env.GITHUB_RUN_ID
-    ? `${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`
-    : undefined
-  execFileSync(
-    'gh',
-    [
-      'api',
-      `repos/${repo}/statuses/${pr.head.sha}`,
-      '-f',
-      `state=${ok ? 'success' : 'failure'}`,
-      '-f',
-      `context=${context}`,
-      '-f',
-      `description=${description.slice(0, 140)}`,
-      ...(runUrl ? ['-f', `target_url=${runUrl}`] : []),
-    ],
-    { stdio: ['ignore', 'ignore', 'inherit'] },
-  )
+  return { ok, lines, description, sha: pr.head.sha }
+}
+
+function main() {
+  const repo = process.env.GITHUB_REPOSITORY
+  const number = process.env.PR_NUMBER
+  if (!repo || !number) throw new Error('GITHUB_REPOSITORY and PR_NUMBER are required')
+  const context = process.env.STATUS_CONTEXT
+  // With a status, HEAD_SHA is required: it is marked pending before any lookup, so a
+  // failed or interrupted evaluation can never leave an earlier success in place.
+  const headSha = process.env.HEAD_SHA
+  if (context && !headSha) throw new Error('HEAD_SHA is required with STATUS_CONTEXT')
+  if (context) postStatus(repo, headSha, context, 'pending', 'evaluating review risk')
+
+  let result
+  try {
+    result = evaluate(repo, number, headSha)
+  } catch (err) {
+    if (context)
+      postStatus(repo, headSha, context, 'error', 'evaluation failed; re-run Review risk')
+    throw err
+  }
+  if (result.superseded) {
+    console.log(`PR head moved past ${headSha}; the newer commit is evaluated by its own run.`)
+    return
+  }
+  console.log(result.lines.join('\n'))
+  if (process.env.GITHUB_STEP_SUMMARY)
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${result.lines.join('\n')}\n`)
+  if (!context) {
+    if (!result.ok) process.exit(1)
+    return
+  }
+  postStatus(repo, result.sha, context, result.ok ? 'success' : 'failure', result.description)
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main()
