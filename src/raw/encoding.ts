@@ -98,12 +98,14 @@ export function buildFileInfoHeaders(
 /**
  * Extracts custom file-info key/value pairs from B2 response headers.
  *
- * Scans for headers prefixed with `x-bz-info-` and decodes both the
- * key suffix and value using {@link decodeFileName}.
+ * Scans for headers prefixed with `x-bz-info-` and percent-decodes both the
+ * key suffix and value. Malformed percent escapes throw `URIError`.
  *
  * @param headers - The HTTP response headers from a B2 download or file-info call.
  *
  * @returns A record of decoded file-info key/value pairs.
+ *
+ * @throws A `URIError` if a key suffix or value contains malformed percent encoding.
  */
 export function parseFileInfoHeaders(headers: Headers): Record<string, string> {
   const info: Record<string, string> = {}

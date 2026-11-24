@@ -3,6 +3,7 @@ import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { bestEffort } from '../util/best-effort.ts'
+import { discardPartUploadUrls } from './part-url-pool.ts'
 
 /** Event emitted when best-effort `b2_cancel_large_file` cleanup fails. */
 export interface CancelLargeFileCleanupFailureEvent {
@@ -100,6 +101,7 @@ export async function cancelLargeFileBestEffort(
         requestOptions,
       )
       await waitForCleanup(request, requestOptions.signal)
+      discardPartUploadUrls(accountInfo, fileId)
     },
     (error) => options?.onCleanupFailure?.({ fileId, error, reason: 'cancel-failed' }),
   )

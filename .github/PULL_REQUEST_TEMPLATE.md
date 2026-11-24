@@ -32,7 +32,7 @@ roll back. Call out anything that cannot be reverted cleanly. -->
 ## Verification
 
 - [ ] `pnpm verify` passes locally (the full gate CI mirrors)
-- [ ] Changelog fragment added with `pnpm run changelog:new`, `BREAKING:`-tagged if it breaks callers (or labeled `skip-changelog`)
+- [ ] User-facing change: changelog fragment added with `pnpm run changelog:new`, `BREAKING:`-tagged if it breaks callers; PR and issue on the `vX.Y.Z` milestone
 - [ ] Tests fail when the change is reverted; new `**/*.test.ts` are isomorphic (Node + browser)
 - [ ] Response-shape / simulator changes match the cited Backblaze B2 docs (or N/A)
 - [ ] JSDoc, README and contributor docs match the final behavior

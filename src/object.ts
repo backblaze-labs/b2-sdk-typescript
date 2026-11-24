@@ -133,15 +133,17 @@ export type HeadCallOptions = Omit<
 export class B2Object {
   /** The file name (path) within the bucket. */
   readonly fileName: string
-  private readonly client: B2Client
+  readonly #client: B2Client
   private readonly bucket: Bucket
   private readonly uploadRetryOptions: RetryOptions
+  readonly #retryUploadConnectionFaults: boolean
 
   /**
    * @param client - The parent B2Client instance.
    * @param bucket - The parent Bucket this object belongs to.
    * @param fileName - The file path within the bucket.
    * @param uploadRetryOptions - Resolved client upload retry defaults.
+   * @param retryUploadConnectionFaults - Client default for single-file POST connection retries.
    *
    * @internal
    */
@@ -150,11 +152,13 @@ export class B2Object {
     bucket: Bucket,
     fileName: string,
     uploadRetryOptions: RetryOptions,
+    retryUploadConnectionFaults = true,
   ) {
-    this.client = client
+    this.#client = client
     this.bucket = bucket
     this.fileName = fileName
     this.uploadRetryOptions = uploadRetryOptions
+    this.#retryUploadConnectionFaults = retryUploadConnectionFaults
   }
 
   /**
@@ -164,7 +168,7 @@ export class B2Object {
    * @returns Metadata for the uploaded file version.
    */
   async upload(options: B2ObjectUploadOptions): Promise<FileVersion> {
-    const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
+    const recommendedPartSize = this.#client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
     const uploadRetryOptions = mergeUploadRetryOptions(this.uploadRetryOptions, options.retry)
 
@@ -174,7 +178,7 @@ export class B2Object {
         : this.bucket.info
       const bucketDefaultRetention = bucketDefaultRetentionSnapshot(bucketInfo)
       const bucketDefaultSse = bucketDefaultServerSideEncryptionSnapshot(bucketInfo)
-      return uploadLargeFile(this.client.raw, this.client.accountInfo, {
+      return uploadLargeFile(this.#client.raw, this.#client.accountInfo, {
         ...options,
         bucketId: this.bucket.id,
         fileName: this.fileName,
@@ -193,16 +197,18 @@ export class B2Object {
     }
     rejectSmallResumeFileId(options, 'B2Object.upload')
     const smallOptions = stripResumeOnlyOptions(options)
-    return uploadSmallFile(this.client.raw, this.client.accountInfo, {
+    return uploadSmallFile(this.#client.raw, this.#client.accountInfo, {
       ...smallOptions,
       bucketId: this.bucket.id,
       fileName: this.fileName,
       retry: uploadRetryOptions,
+      retryUploadConnectionFaults:
+        options.retryUploadConnectionFaults ?? this.#retryUploadConnectionFaults,
     })
   }
 
   private async fetchFreshBucketInfo(): Promise<Bucket['info']> {
-    const fresh = await this.client.listBuckets({ bucketId: this.bucket.id })
+    const fresh = await this.#client.listBuckets({ bucketId: this.bucket.id })
     const found = fresh[0]
     if (!found) throw new Error(`Bucket ${this.bucket.id} not found`)
     return found.info
@@ -216,7 +222,7 @@ export class B2Object {
    * @returns The download result with response headers and body stream.
    */
   async download(options?: DownloadCallOptions): Promise<DownloadResult> {
-    return downloadByName(this.client.raw, this.client.accountInfo, {
+    return downloadByName(this.#client.raw, this.#client.accountInfo, {
       bucketName: this.bucket.name,
       fileName: this.fileName,
       ...options,
@@ -235,7 +241,7 @@ export class B2Object {
    * @returns Parsed download headers (content type, SHA-1, file info, etc.).
    */
   async head(options?: HeadCallOptions): Promise<HeadResult> {
-    return headByName(this.client.raw, this.client.accountInfo, {
+    return headByName(this.#client.raw, this.#client.accountInfo, {
       bucketName: this.bucket.name,
       fileName: this.fileName,
       ...options,
@@ -251,7 +257,7 @@ export class B2Object {
    * @returns The download result with response headers and body stream.
    */
   async downloadById(fileId: FileId, options?: DownloadCallOptions): Promise<DownloadResult> {
-    return downloadById(this.client.raw, this.client.accountInfo, {
+    return downloadById(this.#client.raw, this.#client.accountInfo, {
       fileId,
       ...options,
     })
@@ -269,7 +275,7 @@ export class B2Object {
    * @returns Parsed download headers.
    */
   async headById(fileId: FileId, options?: HeadCallOptions): Promise<HeadResult> {
-    return headById(this.client.raw, this.client.accountInfo, {
+    return headById(this.#client.raw, this.#client.accountInfo, {
       fileId,
       ...options,
     })
@@ -277,19 +283,29 @@ export class B2Object {
 
   /**
    * Creates a parallel-download ReadableStream that fetches the file in concurrent ranged chunks.
+   * Retryable range-body failures, such as a connection reset, use the client's
+   * `retry.maxRetries` setting (default 5). Partial range bytes are discarded
+   * before retrying. Each new range request has its own transport retry budget,
+   * so the setting is not a total HTTP request limit. Set it to 0 on the client
+   * to disable transient request and range-body retries; expired-token
+   * reauthorization remains separate. There is no per-call retry override here.
+   * `rangeSize` must be positive and `concurrency` must be a positive integer,
+   * including for an empty file.
    * @param fileId - The file version ID to download.
    * @param totalSize - Total file size in bytes (needed to compute range boundaries).
    * @param options - Concurrency, range size, SSE-C decryption, and abort signal.
    *
    * @returns A Web ReadableStream of file data in sequential order.
+   *
+   * @throws A `RangeError` synchronously if `rangeSize` is not positive or `concurrency` is not a positive integer.
    */
   createReadStream(
     fileId: FileId,
     totalSize: number,
     options?: {
-      /** Size of each ranged GET request in bytes. Defaults to 10 MB. */
+      /** Size of each ranged GET request in bytes. Must be positive. Defaults to 10 MB. */
       rangeSize?: number
-      /** Number of concurrent range requests. Defaults to 4. */
+      /** Number of concurrent range requests. Must be a positive integer. Defaults to 4. */
       concurrency?: number
       /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
       serverSideEncryption?: SseCDownloadKey
@@ -297,17 +313,22 @@ export class B2Object {
       signal?: AbortSignal
     },
   ): ReadableStream<Uint8Array> {
-    return createParallelDownloadStream(this.client.raw, this.client.accountInfo, {
+    return createParallelDownloadStream(this.#client.raw, this.#client.accountInfo, {
       fileId,
       totalSize,
       ...options,
+      bodyRetryOptions: this.uploadRetryOptions,
     })
   }
 
   /**
-   * Creates a Web `WritableStream` that uploads streamed data into this file
-   * using the multipart protocol. Pipe a `ReadableStream<Uint8Array>` into the
-   * returned `writable` and await `done` to get the final {@link FileVersion}.
+   * Creates a Web `WritableStream` that uploads streamed data into this file.
+   * Streams of one part or less finish through a single-request upload; larger
+   * streams use the multipart protocol. At exactly one part, the provisional
+   * large file is cancelled and the bytes are uploaded again as a single file.
+   * Closing a stream without writing any data rejects.
+   * Pipe a `ReadableStream<Uint8Array>` into the returned `writable` and await
+   * `done` to get the final {@link FileVersion}.
    *
    * Note: streaming uploads do not support resume because the size and per-part
    * hashes are not known in advance. Use {@link upload} with a buffered source
@@ -319,7 +340,7 @@ export class B2Object {
    */
   createWriteStream(options?: B2ObjectWriteStreamOptions): UploadWriteHandle {
     const uploadRetryOptions = mergeUploadRetryOptions(this.uploadRetryOptions, options?.retry)
-    return createWriteStream(this.client.raw, this.client.accountInfo, {
+    return createWriteStream(this.#client.raw, this.#client.accountInfo, {
       ...(options ?? {}),
       bucketId: this.bucket.id,
       fileName: this.fileName,
@@ -334,9 +355,9 @@ export class B2Object {
    * @returns The file version metadata.
    */
   async getFileInfo(fileId: FileId): Promise<FileVersion> {
-    return this.client.raw.getFileInfo(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.getFileInfo(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       { fileId },
     )
   }

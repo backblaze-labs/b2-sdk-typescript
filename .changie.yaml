@@ -8,22 +8,13 @@ kindFormat: '### {{.Kind}}'
 changeFormat: '- {{.Body}}'
 footerFormat: |-
   [{{.VersionNoPrefix}}]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/{{.PreviousVersion}}...{{.Version}}
-# Breaking kinds stay `minor`: pre-1.0 semver bumps the minor, so a major release is always an
-# explicit version, never `auto`. `pnpm version` drives the bump; `pnpm run changelog:next`
-# only suggests it. No `replacements`: src/version.ts already reads package.json.
 kinds:
   - label: Added
-    auto: minor
   - label: Changed
-    auto: minor
   - label: Deprecated
-    auto: minor
   - label: Removed
-    auto: minor
   - label: Fixed
-    auto: patch
   - label: Security
-    auto: patch
 newlines:
   afterChangelogHeader: 0
   beforeChangelogVersion: 1
@@ -31,4 +22,5 @@ newlines:
   afterKind: 1
   beforeKind: 1
   beforeFooterTemplate: 1
-envPrefix: CHANGIE_
+# Changelog rendering only: package versions and publishing remain with pnpm/npm.
+# Do not add version replacements here.

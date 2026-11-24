@@ -1,5 +1,123 @@
 # Migration guide
 
+## v0.6.0: Authorization-response persistence and HTTPS URLs
+
+### Before
+
+Serializing an authorization response with `JSON.stringify(response)` retained
+its authorization token, and spreading the response copied the token. A custom
+account store could serialize the object passed to `setAuth()` directly.
+
+### After
+
+Returned authorization responses expose the real token through
+`response.authorizationToken`, but omit it from spread and property enumeration.
+JSON and Node inspect diagnostics substitute a placeholder and include the
+`_b2sdkDiagnostic` marker. Diagnostic JSON is not an authorization cache.
+
+Use the persistence helper on the original response before serialization. This
+complete example returns cache JSON for a caller-provided credential pair:
+
+```ts
+import { B2Client, authorizeAccountResponseForPersistence } from '@backblaze-labs/b2-sdk'
+
+export async function createAuthorizationCacheJson(
+  applicationKeyId: string,
+  applicationKey: string,
+): Promise<string> {
+  const client = new B2Client({ applicationKeyId, applicationKey })
+  const response = await client.authorize()
+  const cache = authorizeAccountResponseForPersistence(response)
+  return JSON.stringify(cache)
+}
+```
+
+Store the resulting JSON only in credential-grade storage and never print it.
+The helpers produce plain copies containing all own response data and the real
+token, with diagnostic hooks removed. They reject marked diagnostic summaries
+and missing or non-string tokens with `TypeError`; they cannot recover a token
+from previously saved diagnostic JSON. Authorize again if only that JSON remains.
+
+The same migration applies to these responses; all four helpers can be imported
+from the package root or `@backblaze-labs/b2-sdk/raw`:
+
+| Response | Persistence helper |
+| --- | --- |
+| `authorize()` / `authorizeAccount()` | `authorizeAccountResponseForPersistence` |
+| `getUploadUrl()` | `getUploadUrlResponseForPersistence` |
+| `getUploadPartUrl()` | `getUploadPartUrlResponseForPersistence` |
+| `getDownloadAuthorization()` | `downloadAuthorizationResponseForPersistence` |
+
+`B2Client.authorize()` now passes a separate plain response to its account store;
+do not rely on object identity between its result and `accountInfo.getAuth()`.
+`InMemoryAccountInfo.setAuth()` copies responses with diagnostic hooks or token
+accessors, while valid plain responses retain their identity. `getAuth()` returns
+the plain stored response with its real token. `FileAccountInfo` handles its own
+persistence without requiring a caller-side helper.
+
+The response token accessor is readonly. On Bun, returned responses also have an
+inherited non-enumerable JSON hook on their prototype; use field access rather
+than relying on a plain-object prototype or descriptor layout.
+
+Guarded URLs now require HTTPS when host suffixes are configured. Update any
+plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values supplied by a custom
+endpoint to HTTPS. Other schemes are rejected too. An unlocked guard with no
+configured suffixes keeps its existing behavior, and a custom transport still
+owns its URL validation and bypasses the SDK's guard.
+
+## v0.5.0: Single-file upload connection-fault retry opt-out
+
+Upload POST connection faults retry by default with a fresh upload URL. If a
+single-file POST reached B2 before the connection dropped, replay can create
+duplicate versions. Object Lock retention or legal hold can prevent deleting
+those duplicates. Multipart retries replace the same part number instead.
+
+Previously, `retry: { maxRetries: 0 }` stopped connection-fault retries only by
+also disabling the existing server, auth-token, and upload-URL retries. Use
+`retryUploadConnectionFaults: false` to disable just the single-file POST
+connection-fault retry while keeping those recovery paths and backoff:
+
+```ts
+import { B2Client, BufferSource } from '@backblaze-labs/b2-sdk'
+
+async function uploadWithConnectionFaultOptOut(): Promise<void> {
+  const client = new B2Client({
+    applicationKeyId: 'your-application-key-id',
+    applicationKey: 'your-application-key',
+    retryUploadConnectionFaults: false,
+  })
+  await client.authorize()
+  const bucket = await client.getBucket('your-existing-bucket')
+  if (bucket === null) throw new Error('Bucket not found')
+  await bucket.upload({
+    fileName: 'data.bin',
+    source: new BufferSource(new Uint8Array([1, 2, 3])),
+  })
+}
+
+uploadWithConnectionFaultOptOut().catch(console.error)
+```
+
+Replace the credentials and bucket name before running. You can also set the
+option directly on `Bucket.upload()` or `B2Object.upload()`. A per-call value
+overrides the client default, including `true` on a client configured with
+`false`. Omitting the option retains the current default-on behavior.
+
+The option covers upload-callback network faults, including wrapped
+`TypeError`/`DOMException` errors and `requestTimeoutMs` timeouts **before
+response headers arrive**. Upload-URL acquisition failures keep retrying under
+their existing policy. Multipart uploads and write streams ignore the new
+setting and retain their existing retry policy.
+
+Failures while reading a successful response body, including body-read
+timeouts, still follow `retryResponseBodyFailures`. Its default is `false`;
+setting it to `true` can replay a stored single-file POST even when
+`retryUploadConnectionFaults` is `false`. This option is not an exactly-once
+guarantee. Keeping both options `false` avoids these two automatic single-file
+replay paths without disabling server/auth/upload-URL retries.
+
+## v4 response-shape migrations
+
 This guide covers the breaking changes introduced while aligning the SDK's
 TypeScript surface with Backblaze B2's **v4** native API (the `v0.4.0` line,
 tracked in [#193](https://github.com/backblaze-labs/b2-sdk-typescript/issues/193)).

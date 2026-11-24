@@ -1,10 +1,11 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import { FinishLargeFileResponseBodyError, NetworkError } from '../errors/index.ts'
+import { B2Error, FinishLargeFileResponseBodyError, NetworkError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { isAbortError, isTimeoutError } from '../util/abort.ts'
+import { discardPartUploadUrls } from './part-url-pool.ts'
 
 /** Context for safely finalizing a large file. */
 export interface FinishLargeFileContext {
@@ -33,7 +34,7 @@ export async function finishLargeFileWithAbortReconciliation(
 ): Promise<FileVersion> {
   context.signal?.throwIfAborted()
   try {
-    return await raw.finishLargeFile(
+    const result = await raw.finishLargeFile(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
       {
@@ -47,6 +48,8 @@ export async function finishLargeFileWithAbortReconciliation(
             ...(context.retry !== undefined ? { retry: context.retry } : {}),
           },
     )
+    discardPartUploadUrls(accountInfo, context.fileId)
+    return result
   } catch (err) {
     if (err instanceof FinishLargeFileResponseBodyError) {
       throw finishLargeFileResponseBodyErrorWithContext(err, context)
@@ -87,6 +90,7 @@ function finishLargeFileResponseBodyErrorWithContext(
 
 function isAmbiguousFinishDispatchFailure(err: unknown, signal: AbortSignal | undefined): boolean {
   if (err instanceof NetworkError) return true
+  if (err instanceof B2Error && err.status >= 500 && err.status < 600) return true
   if (isTimeoutError(err)) return true
   if (signal?.aborted !== true) return false
   if (signal.reason !== undefined && Object.is(err, signal.reason)) return true

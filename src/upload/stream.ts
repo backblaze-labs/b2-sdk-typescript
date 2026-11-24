@@ -3,6 +3,7 @@ import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
+import { BufferSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
@@ -18,13 +19,16 @@ import {
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from './finish.ts'
+import { assertPartLimit, PartLimitError } from './part-limit.ts'
 import {
   resolveRetryResponseBodyFailures,
+  resolveRetryUploadConnectionFaults,
   type UploadRetryOptions,
   uploadPartWithFreshUrl,
 } from './retry.ts'
+import { uploadSmallFile } from './single.ts'
 
-/** Options for creating a streaming multipart upload sink. */
+/** Options for creating a streaming upload sink. */
 export interface CreateWriteStreamOptions extends UploadRetryOptions, CleanupFailureOptions {
   /** Target bucket for the upload. */
   readonly bucketId: BucketId
@@ -76,14 +80,19 @@ export interface UploadWriteHandle {
 }
 
 /**
- * Creates a {@link WritableStream} that streams data into a B2 multipart upload.
+ * Creates a {@link WritableStream} that uploads data into B2.
  *
  * Buffers incoming chunks until `partSize` bytes are accumulated, ships each
  * complete part through the standard multipart engine, and finalizes the file
- * once the stream is closed. Honours backpressure via the queue's bounded
- * concurrency. Streaming uploads do not support resume because the total size
- * and per-part hashes aren't known in advance; use {@link uploadLargeFile} with
- * a buffered source when resume is required.
+ * once the stream is closed. Streams of one part or less finish through a
+ * single-request file upload; larger streams finish as multipart uploads.
+ * At exactly one part, the provisional large file is cancelled and the retained
+ * bytes are uploaded again through the single-request path.
+ * Closing a stream without writing any data rejects.
+ *
+ * Honours backpressure via the queue's bounded concurrency. Streaming uploads
+ * do not support resume because the total size and per-part hashes aren't known
+ * in advance; use {@link uploadLargeFile} with a buffered source when resume is required.
  *
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state (tokens, URLs, part URL pool).
@@ -111,12 +120,17 @@ export function createWriteStream(
   let largeFileId: LargeFileId | null = null
   let startPromise: Promise<LargeFileId> | null = null
   let cancelAfterStartScheduled = false
+  let cancelPromise: Promise<void> | null = null
+  let failureCleanup: Promise<unknown> | null = null
+  let streamController: WritableStreamDefaultController
   let nextPartNumber = 1
   let pendingBytes = 0
   const pending: Uint8Array[] = []
   const partSha1s: string[] = []
   const inflight: Promise<void>[] = []
   let errored: Error | null = null
+  // Keep at most one part for the single-request fallback at close().
+  let firstPartData: Uint8Array | null = null
 
   // ES2024 `Promise.withResolvers()` exposes the resolve/reject pair as
   // properties of the returned object, avoiding the `let resolve!:` /
@@ -201,6 +215,9 @@ export function createWriteStream(
       retryResponseBodyFailures: resolveRetryResponseBodyFailures(
         options.retryResponseBodyFailures,
       ),
+      retryUploadConnectionFaults: resolveRetryUploadConnectionFaults(
+        options.retryUploadConnectionFaults,
+      ),
       ...(options.serverSideEncryption !== undefined
         ? { serverSideEncryption: options.serverSideEncryption }
         : {}),
@@ -211,17 +228,22 @@ export function createWriteStream(
   }
 
   function markErrored(err: unknown): Error {
-    const error = toError(err)
-    errored = error
+    errored ??= toError(err)
     tracker.dispose()
-    abortScope.abort(error)
-    return error
+    abortScope.abort(errored)
+    return errored
   }
 
-  function cancelStartedLargeFile(fileId: LargeFileId): void {
-    if (cancelAfterStartScheduled) return
+  function cancelStartedLargeFile(fileId: LargeFileId): Promise<void> {
+    if (cancelAfterStartScheduled) return cancelPromise ?? Promise.resolve()
     cancelAfterStartScheduled = true
-    void cancelLargeFileBestEffort(raw, accountInfo, fileId, cleanupWriteStreamOptions(options))
+    cancelPromise = cancelLargeFileBestEffort(
+      raw,
+      accountInfo,
+      fileId,
+      cleanupWriteStreamOptions(options),
+    )
+    return cancelPromise
   }
 
   function scheduleCancelLargeFileAfterStart(started: Promise<LargeFileId>): void {
@@ -230,6 +252,37 @@ export function createWriteStream(
       .catch(() => {
         // If start failed, no file ID is available to cancel.
       })
+  }
+
+  async function failUpload(err: unknown): Promise<unknown> {
+    const observedError = markErrored(err)
+    pending.length = 0
+    pendingBytes = 0
+    firstPartData = null
+    failureCleanup ??= (async () => {
+      const fileId = largeFileId
+      if (fileId === null) {
+        if (startPromise !== null) scheduleCancelLargeFileAfterStart(startPromise)
+        return observedError
+      }
+      await waitForInflightPartsToSettle()
+      if (cancelAfterStartScheduled) {
+        await cancelPromise
+        return observedError
+      }
+      cancelAfterStartScheduled = true
+      return resolveLargeFileErrorAfterCleanup(observedError, raw, accountInfo, {
+        fileId,
+        bucketId: options.bucketId,
+        fileName: options.fileName,
+        signal: options.signal,
+        onCleanupFailure: options.onCleanupFailure,
+      })
+    })()
+    const finalError = await failureCleanup
+    abortScope.dispose()
+    rejectDone(finalError)
+    return finalError
   }
 
   async function settleInflightForClose(): Promise<PromiseSettledResult<void>[]> {
@@ -256,12 +309,15 @@ export function createWriteStream(
   }
 
   function startPartWithAcquiredSlot(data: Uint8Array, partNumber: number): void {
+    firstPartData = partNumber === 1 ? data : null
     const task = (async () => {
       try {
         await shipPart(data, partNumber)
       } catch (err) {
-        markErrored(err)
-        throw err
+        // Cleanup waits for all part tasks, including this one: do not await it here.
+        void failUpload(err)
+        streamController.error(errored)
+        throw errored
       } finally {
         sem.release()
       }
@@ -332,12 +388,22 @@ export function createWriteStream(
     startPartWithAcquiredSlot(data, partNumber)
   }
 
-  const writable = new WritableStream<Uint8Array>({
+  const writable = new UploadWritableStream(() => errored, {
+    start(controller): void {
+      streamController = controller
+    },
     async write(chunk: Uint8Array): Promise<void> {
       if (errored) throw errored
       abortScope.signal.throwIfAborted()
       if (chunk.byteLength === 0) return
 
+      try {
+        assertPartLimit(
+          nextPartNumber - 1 + Math.ceil((pendingBytes + chunk.byteLength) / partSize),
+        )
+      } catch (err) {
+        throw await failUpload(err)
+      }
       pending.push(chunk)
       pendingBytes += chunk.byteLength
       while (pendingBytes >= partSize) {
@@ -359,9 +425,51 @@ export function createWriteStream(
         if (errored) throw errored
         abortScope.signal.throwIfAborted()
 
-        // Ship any remaining bytes as the last part. If the total fit in one
-        // single buffered batch (no parts shipped yet), we have to use the
-        // multipart path anyway since we already called startLargeFile lazily.
+        // B2 cannot finish a large file with only one part. Small buffered
+        // streams and exact-one-part streams use the single-request path.
+        const singleData =
+          nextPartNumber === 1 && pendingBytes > 0
+            ? carveExact(pending, pendingBytes)
+            : nextPartNumber === 2 && pendingBytes === 0
+              ? firstPartData
+              : null
+        if (singleData !== null) {
+          await settleInflightForClose()
+          if (errored) throw errored
+          abortScope.signal.throwIfAborted()
+          if (largeFileId !== null) await cancelStartedLargeFile(largeFileId)
+          const result = await uploadSmallFile(raw, accountInfo, {
+            bucketId: options.bucketId,
+            fileName: options.fileName,
+            contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
+            fileInfo: options.fileInfo ?? {},
+            ...(options.serverSideEncryption !== undefined
+              ? { serverSideEncryption: options.serverSideEncryption }
+              : {}),
+            ...(options.customUploadTimestamp !== undefined
+              ? { customUploadTimestamp: options.customUploadTimestamp }
+              : {}),
+            retry: options.retry,
+            onUploadRetry: options.onUploadRetry,
+            retryResponseBodyFailures: options.retryResponseBodyFailures,
+            retryUploadConnectionFaults: options.retryUploadConnectionFaults,
+            source: new BufferSource(singleData),
+            signal: abortScope.signal,
+          })
+          if (nextPartNumber === 1) {
+            tracker.addBytes(singleData.byteLength)
+            tracker.completePart()
+          }
+          pending.length = 0
+          pendingBytes = 0
+          firstPartData = null
+          tracker.dispose()
+          abortScope.dispose()
+          resolveDone(result)
+          return
+        }
+
+        // Ship any remaining bytes as the final part of a multipart upload.
         if (pendingBytes > 0) {
           await dispatchPart()
         }
@@ -394,68 +502,58 @@ export function createWriteStream(
         abortScope.dispose()
         resolveDone(result)
       } catch (err) {
-        const closeError = toError(err)
-        if (errored === null) errored = closeError
-        tracker.dispose()
-        abortScope.abort(errored)
-        const observedError = errored
-        const fileIdToCancel = largeFileId
-        if (fileIdToCancel === null && startPromise !== null) {
-          // Mirror writer.abort(): close() must not wait for non-abortable
-          // b2_start_large_file. If a file ID arrives later, cancel it in the
-          // background.
-          scheduleCancelLargeFileAfterStart(startPromise)
-          abortScope.dispose()
-          rejectDone(observedError)
-          throw observedError
-        }
-        await Promise.allSettled(inflight)
-        // Capture into a const so the cancel closure sees a non-null
-        // `fileId`; closures don't observe the outer `!== null` narrowing
-        // because the variable is mutable across the lambda boundary.
-        let finalError: unknown = observedError
-        if (fileIdToCancel !== null) {
-          finalError = await resolveLargeFileErrorAfterCleanup(observedError, raw, accountInfo, {
-            fileId: fileIdToCancel,
-            bucketId: options.bucketId,
-            fileName: options.fileName,
-            signal: options.signal,
-            onCleanupFailure: options.onCleanupFailure,
-          })
-        }
-        abortScope.dispose()
-        rejectDone(finalError)
-        throw finalError
+        throw await failUpload(err)
       }
     },
 
     async abort(reason: unknown): Promise<void> {
-      const abortError = markErrored(reason)
-      pending.length = 0
-      pendingBytes = 0
-      const fileIdToCancel = largeFileId
-      if (fileIdToCancel === null && startPromise !== null) {
-        // Do not await an in-flight start request here. A stalled
-        // b2_start_large_file must not make writer.abort() hang; if it later
-        // returns a file ID, cancel it best-effort in the background.
-        scheduleCancelLargeFileAfterStart(startPromise)
-      }
-      if (fileIdToCancel !== null) {
-        await waitForInflightPartsToSettle()
-        await cancelLargeFileBestEffort(
-          raw,
-          accountInfo,
-          fileIdToCancel,
-          cleanupWriteStreamOptions(options),
-        )
-      }
-      tracker.dispose()
-      abortScope.dispose()
-      rejectDone(abortError)
+      await failUpload(reason)
     },
   })
 
   return { writable, done }
+}
+
+// Native close() replaces a stored stream error with TypeError once the stream
+// is fully errored. Preserve the SDK part-limit reason for subsequent closes.
+class UploadWritableStream extends WritableStream<Uint8Array> {
+  readonly #getError: () => Error | null
+
+  constructor(getError: () => Error | null, sink: UnderlyingSink<Uint8Array>) {
+    super(sink)
+    this.#getError = getError
+  }
+
+  override close(): Promise<void> {
+    const error = this.#getError()
+    if (!this.locked && error instanceof PartLimitError) return Promise.reject(error)
+    return super.close()
+  }
+
+  override getWriter(): WritableStreamDefaultWriter<Uint8Array> {
+    return new UploadStreamWriter(this, this.#getError)
+  }
+}
+
+class UploadStreamWriter extends WritableStreamDefaultWriter<Uint8Array> {
+  readonly #getError: () => Error | null
+  #released = false
+
+  constructor(stream: WritableStream<Uint8Array>, getError: () => Error | null) {
+    super(stream)
+    this.#getError = getError
+  }
+
+  override close(): Promise<void> {
+    const error = this.#getError()
+    if (!this.#released && error instanceof PartLimitError) return Promise.reject(error)
+    return super.close()
+  }
+
+  override releaseLock(): void {
+    super.releaseLock()
+    this.#released = true
+  }
 }
 
 function cleanupWriteStreamOptions(options: CreateWriteStreamOptions): {

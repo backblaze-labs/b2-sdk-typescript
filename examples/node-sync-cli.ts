@@ -104,6 +104,7 @@ async function main() {
   console.log(
     `\nDone. Uploaded: ${uploaded}, Skipped: ${skipped}, Errors: ${errors}, Hashed: ${hashedBytes} bytes`,
   )
+  if (errors > 0) process.exitCode = 1
 }
 
 main().catch((err) => {

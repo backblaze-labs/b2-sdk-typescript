@@ -10,6 +10,7 @@ import type { B2ErrorResponse } from '../types/errors.ts'
 import { abortReason, raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
 import {
   isBackupNonIdempotentMutationEndpoint,
+  isNativeNonIdempotentMutationEndpoint,
   isPartnerNonIdempotentMutationEndpoint,
 } from './non-idempotent-mutations.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
@@ -448,14 +449,15 @@ export interface RetryTransportOptions {
 }
 
 /**
- * Decide whether `url` points at a URL-pinned upload POST endpoint.
+ * Decide whether a request targets a URL-pinned upload POST endpoint.
  *
- * @param url - Request URL to inspect.
+ * @param request - Request to inspect.
  *
  * @returns Whether the request is a direct upload endpoint.
  */
-function isUploadEndpoint(url: string): boolean {
-  const endpoint = b2ApiEndpointName(url)
+function isUploadEndpoint(request: HttpRequest): boolean {
+  if (request.method !== 'POST') return false
+  const endpoint = b2ApiEndpointName(request.url)
   return endpoint === 'b2_upload_file' || endpoint === 'b2_upload_part'
 }
 
@@ -477,6 +479,13 @@ function isKnownPartnerNonIdempotentMutationEndpoint(url: string): boolean {
 
 function isKnownBackupNonIdempotentMutationEndpoint(url: string): boolean {
   return isBackupNonIdempotentMutationEndpoint(backupApiEndpointName(url))
+}
+
+function isNativeNonIdempotentMutationRequest(request: HttpRequest): boolean {
+  return (
+    request.method === 'POST' &&
+    isNativeNonIdempotentMutationEndpoint(b2ApiEndpointName(request.url))
+  )
 }
 
 function isNonIdempotentMutationRequest(request: HttpRequest): boolean {
@@ -507,13 +516,18 @@ function backupApiEndpointName(url: string): string | undefined {
   return segments[apiRootIndex + 3]
 }
 
+function isAmbiguousNativeMutationResponse(request: HttpRequest, status: number): boolean {
+  return isNativeNonIdempotentMutationRequest(request) && (status === 408 || status >= 500)
+}
+
 function isReplayUnsafeRequest(request: HttpRequest): boolean {
   if (request.idempotent === false) return true
   if (request.method !== 'POST') return false
   return (
-    isUploadEndpoint(request.url) ||
+    isUploadEndpoint(request) ||
     isStartLargeFileEndpoint(request.url) ||
     isFinishLargeFileEndpoint(request.url) ||
+    isNativeNonIdempotentMutationRequest(request) ||
     isNonIdempotentMutationRequest(request)
   )
 }
@@ -534,8 +548,8 @@ function shouldRetryInPlace(error: B2Error, request: HttpRequest): boolean {
   if (isAuthorizeEndpoint(request.url) && error instanceof ExpiredAuthTokenError) return false
   if (isNonIdempotentMutationRequest(request)) return false
   if (isStartLargeFileEndpoint(request.url) || isFinishLargeFileEndpoint(request.url)) return false
-  if (isUploadEndpoint(request.url) && error.status === 429) return true
-  if (isUploadEndpoint(request.url)) return false
+  if (isUploadEndpoint(request) && error.status === 429) return true
+  if (isUploadEndpoint(request)) return false
   return true
 }
 
@@ -558,6 +572,11 @@ function isTerminalTransportError(err: unknown): boolean {
  * Handles transient errors (408, 429, and the transient 5xx set 500/502/503/504),
  * expired auth tokens, and network failures. Delegates to an inner
  * {@link HttpTransport}.
+ *
+ * Native `b2_create_key`, `b2_create_bucket`, `b2_copy_file`, and `b2_hide_file`
+ * are not replayed after connection failures or HTTP 408/5xx responses. Check
+ * the outcome before retrying manually. Expired-token reauth and HTTP 429
+ * backoff remain enabled because those responses reject the operation.
  *
  * Upload endpoints (`b2_upload_file` / `b2_upload_part`) are URL-pinned. Their
  * retryable pod failures bubble to the upload layer, which evicts the failed
@@ -645,11 +664,17 @@ export class RetryTransport implements HttpTransport {
           ...(requestId !== undefined ? { requestId } : {}),
         })
 
+        // These outcomes do not tell us whether the mutation was applied.
+        // Explicit expired-token and throttling refusals retain normal retry handling.
+        if (isAmbiguousNativeMutationResponse(request, response.status)) {
+          throw error
+        }
+
         if (
           error instanceof ExpiredAuthTokenError &&
           this.onReauth &&
           !isAuthorizeEndpoint(request.url) &&
-          !isUploadEndpoint(request.url) &&
+          !isUploadEndpoint(request) &&
           !isNonIdempotentMutationRequest(request) &&
           !didReauth
         ) {

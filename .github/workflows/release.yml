@@ -1,22 +1,13 @@
 name: Release
 
-# Tag-driven release. Publishing is triggered by pushing a `v*` tag, which you
-# create locally with `pnpm version <patch|minor|major>` (that bumps
-# package.json, cuts the CHANGELOG via the `version` lifecycle script, commits,
-# and tags). Push the tag and this workflow builds, publishes to npm via OIDC
-# trusted publishing, and creates the matching GitHub Release.
+# Tag-driven release. pnpm owns package versions; its version hook asks Changie
+# to batch fragments for that exact version. Prepare with --no-git-tag-version
+# in a release PR, then sign/tag the approved merge commit (see RELEASE.md).
+# Publishing keeps npm OIDC trusted publishing and provenance.
 #
-# Release a new version:
-#   pnpm version patch        # 0.1.0 -> 0.1.1, commits + tags v0.1.1
-#   git push --follow-tags    # pushes the commit and the tag
-#
-# The tag push is what fires this workflow. Pushes to main do NOT publish.
-#
-# ONE-TIME SETUP (see RELEASE.md): the first publish of a brand-new package
-# can't use OIDC (a trusted publisher can't be configured for a package that
-# doesn't exist yet), so 0.1.0 is published manually. After it's live, add a
-# GitHub Actions trusted publisher on npmjs.com for this repo + this workflow
-# filename, and every tagged release after that publishes tokenlessly.
+# ENFORCE_SIGNED_TAGS defaults off while maintainers enroll public signing keys.
+# Signature failures warn in that phase; security triage and milestone readiness
+# remain required. The inspected tag commit must equal the immutable event SHA.
 
 on:
   push:
@@ -24,13 +15,17 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to (re)publish, e.g. v0.1.1'
+        description: 'Existing tag to (re)publish; also select this tag as the workflow ref'
         required: true
       allow_registry_artifact_mismatch:
         description: 'Bootstrap-only: allow an existing npm artifact to differ from this verified tarball'
         required: false
         type: boolean
         default: false
+
+# GitHub enforces cache-mode with scoped tokens, including on workflow_dispatch.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#cache-mode
+cache-mode: none
 
 permissions:
   contents: read # default read-only access; release publishing escalates below
@@ -40,8 +35,69 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-policy:
+    name: Verify release tag and milestone
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      commit: ${{ steps.signature.outputs.commit }}
+    env:
+      REF: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.tag, 'refs/tags/') && inputs.tag || format('refs/tags/{0}', inputs.tag)) || github.ref }}
+    steps:
+      - name: Checkout trusted release policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.2
+          package-manager-cache: false
+      - name: Verify maintainer tag signature
+        id: signature
+        env:
+          ENFORCE_SIGNED_TAGS: ${{ vars.ENFORCE_SIGNED_TAGS }}
+        run: node scripts/verify-release-tag.mjs "$REF"
+      - name: Verify release milestone readiness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/verify-release-milestone.mjs "$REF"
+
+  security:
+    name: Release security triage
+    environment: release-security
+    needs: release-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: read
+    env:
+      REF: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.tag, 'refs/tags/') && inputs.tag || format('refs/tags/{0}', inputs.tag)) || github.ref }}
+    steps:
+      - name: Checkout trusted security policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.2
+          package-manager-cache: false
+      - name: Check release security triage
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_SECURITY_TOKEN }}
+          RELEASE_SECURITY_APPROVAL: ${{ secrets.RELEASE_SECURITY_APPROVAL }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node scripts/release-security-check.mjs "$REF"
+
   build:
     name: Verify release artifact
+    needs: [release-policy, security]
     runs-on: ubuntu-latest
     env:
       REF: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.tag, 'refs/tags/') && inputs.tag || format('refs/tags/{0}', inputs.tag)) || github.ref }}
@@ -49,11 +105,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ env.REF }}
+          ref: ${{ github.sha }}
 
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.22.2
           registry-url: 'https://registry.npmjs.org'
@@ -110,7 +166,7 @@ jobs:
           node scripts/extract-changelog.mjs "$VERSION" > .release/release-notes.md
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-artifacts
           path: .release/*
@@ -120,6 +176,7 @@ jobs:
 
   package-type-analysis:
     name: Analyze package types
+    needs: release-policy
     runs-on: ubuntu-latest
     continue-on-error: true
     env:
@@ -128,11 +185,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ env.REF }}
+          ref: ${{ github.sha }}
 
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           package-manager-cache: false
@@ -151,7 +208,7 @@ jobs:
       contents: read
       id-token: write # OIDC token for npm trusted publishing and provenance
     steps:
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # npm trusted publishing requires npm >= 11.5.1. The Node 24
           # toolchain carries npm 11 on GitHub-hosted runners; Node 22 can
@@ -162,7 +219,7 @@ jobs:
           package-manager-cache: false
 
       - name: Download release artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-artifacts
           path: .release
@@ -239,7 +296,7 @@ jobs:
       contents: write # creates or updates the GitHub Release
     steps:
       - name: Download release artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-artifacts
           path: .release

@@ -142,7 +142,11 @@ Transient upload failures are retried with a fresh B2 upload URL, matching B2's 
 
 Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Retry diagnostics are event-only: the SDK does not log, count, or persist them unless this listener records them. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one.
 
-Uploads do not retry lost success response bodies or upload POST network errors by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. If callers opt into this ambiguity with `retryResponseBodyFailures: true`, retryable upload POST network errors and unreadable response bodies can re-post the payload with a fresh URL, bounded by `retry.maxRetries`; any uploaded `fileRetention` or `legalHold` applies to each duplicate version and can prevent deletion until the retention policy expires or the hold is cleared. Multipart callers may also opt in when replaying the same `partNumber` is acceptable before `finishLargeFile`, including SSE-B2 encrypted parts.
+Single-file and multipart part upload POST connection failures retry by default with a fresh upload URL, as B2 recommends for connection resets and socket timeouts. A repeated single-file POST can create a duplicate file version if the first POST succeeded before the connection failed, especially in versioned or Object Lock buckets. Any uploaded `fileRetention` or `legalHold` applies to each duplicate and can prevent deletion until retention expires or the hold is cleared. Re-uploading the same multipart part number replaces that part.
+
+Set `retryUploadConnectionFaults: false` on `B2Client`, `Bucket.upload()`, or `B2Object.upload()` to stop automatic single-file POST replay after a connection fault, including a timeout before response headers arrive. Per-call values override the client default; the default remains `true`. The opt-out preserves 503, bad-auth-token, bad-upload-URL, upload-URL acquisition retries, and backoff. Multipart parts and write streams ignore this setting and retain their existing retry policy. `retry.maxRetries: 0` still sets the entire retry budget to zero rather than excluding just this class.
+
+Unreadable success response bodies, including body-read timeouts, are controlled independently by `retryResponseBodyFailures` (default `false`). Setting it to `true` permits replay even when `retryUploadConnectionFaults` is `false`, bounded by `retry.maxRetries`. The connection-fault opt-out is not an exactly-once guarantee. See [MIGRATION.md](./MIGRATION.md) for configuration examples and the response-header/body boundary.
 
 Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Multipart workers abort sibling work promptly after a fatal part failure, and best-effort cleanup is bounded so aborting a stream does not hang indefinitely. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. Each HTTP attempt has a 15 minute deadline by default; for streamed download bodies the timeout is idle/no-progress and resets after each chunk. Set `retry.requestTimeoutMs` higher for very slow upload links or to `0` to rely only on your own `AbortSignal`.
 
@@ -159,7 +163,7 @@ the open flag. Retry after active writers stop changing the file.
 
 Resume has two paths. `resumeFileId` targets a known unfinished large-file ID returned by B2 when the multipart upload was started. `resume: true` without `resumeFileId` runs bounded same-name discovery and may continue uploading into the newest compatible unfinished upload; incompatible candidates are skipped and a fresh upload starts. Automatic discovery reuploads every planned part into the selected unfinished file instead of trusting pre-existing server parts by SHA-1 alone. With explicit `resumeFileId`, each local part is hashed again and matching server parts are skipped only when the locally recomputed SHA-1 equals B2's part SHA-1.
 
-Resume discovery is intentionally conservative. The SDK reuses only the newest unfinished large file whose file name, content type, caller-provided file info, encryption, Object Lock retention, legal hold, and uploaded part lengths match the current call. If those checks fail, a new large file is started instead. Caller-provided file info such as `large_file_sha1` or `src_last_modified_millis` is part of that identity, so keep it stable across retries. Discovery does not add SDK metadata to unfinished or finished file info.
+Resume discovery is intentionally conservative. The SDK reuses only the newest unfinished large file whose file name, content type, caller-provided file info, encryption, Object Lock retention, legal hold, and uploaded part lengths match the current call. If those checks fail, a new large file is started instead. For sliceable sources, the SDK computes `large_file_sha1` unless the caller supplies it; caller-supplied values are preserved rather than recomputed. When both the unfinished file and the current call have `large_file_sha1`, their values must match. If only one side has it, that key is ignored for compatibility with older uploads. Other caller-provided file info, such as `src_last_modified_millis`, must still match.
 
 Automatic resume requires a stable content type. When the upload uses the SDK default `b2/x-auto`, same-name discovery starts a fresh large file unless B2 lists the unfinished file with the same `b2/x-auto` value. Provide an explicit `contentType` for automatic resume, or use `resumeFileId` when the caller deliberately trusts a specific unfinished file's listed content type. Explicit content types still require an exact match.
 
@@ -216,14 +220,16 @@ const partial = await bucket.download('large-file.bin', {
 })
 
 // Parallel ranged download (for large files).
-// Each range uses the client's configured RetryTransport budget, so transient
-// 503s are retried without adding a second default retry layer per chunk.
+// The client's transport retries and this stream's retryable body failures use
+// separate retry budgets, both configured through the client's retry settings.
 const obj = bucket.file('big-dataset.parquet')
 const stream = obj.createReadStream(fileId, totalSize, {
   concurrency: 4,
   rangeSize: 10 * 1024 * 1024,
 })
 ```
+
+If a range response body encounters a retryable connection failure, such as a reset, the SDK discards its partial bytes and retries that range. Configure `retry.maxRetries` on `B2Client` (default `5`); `createReadStream` has no per-call retry override. The limit applies separately to body retries for each range and transport retries for each new range request, so it is not a total HTTP request limit. Set `retry.maxRetries: 0` on the client to disable transient request and range-body retries. Expired-token reauthorization remains separate.
 
 Full-body downloads are automatically verified when B2 returns a real `X-Bz-Content-Sha1` digest. If the downloaded bytes do not match, the body stream errors with `ChecksumMismatchError`; discard any partially written output when piping to disk. HEAD requests, range GETs, and files whose SHA-1 is unavailable are not verified because no matching whole-body digest exists.
 
@@ -648,8 +654,10 @@ The SDK automatically retries transient errors with exponential backoff:
 
 - **401 expired_auth_token**: re-authorizes and retries
 - **408, 429, transient 5xx (500, 502, 503, 504)**: exponential backoff with jitter, respects `Retry-After` header
-- **Network errors**: retried with backoff
+- **Network errors**: retried with backoff; high-level single-file upload POST connection faults can be excluded with `retryUploadConnectionFaults: false`
 - **Permanent errors** (403 cap_exceeded, 404 not_found, etc.): thrown immediately
+
+Native `b2_create_key`, `b2_create_bucket`, `b2_copy_file`, and `b2_hide_file` are exceptions: connection failures and HTTP 408/5xx responses are surfaced without automatic replay because the operation may already have been applied. Check whether the key, bucket, copied version, or hide marker exists before manually retrying. Expired-token reauthorization and HTTP 429 backoff (including `Retry-After`) remain enabled for these operations.
 
 Configure retry behavior:
 
@@ -671,8 +679,10 @@ non-streaming response-body reads. For `response.body` download streams it is an
 idle/no-progress timeout that resets after each received chunk, so healthy large
 downloads are not aborted merely because the total transfer takes longer than
 the timeout. Slow large-part uploads may need a higher value or `0` to rely on
-your own `AbortSignal`. Worst-case terminal latency can be roughly
+your own `AbortSignal`. For a single request, terminal latency can be roughly
 `(retry.maxRetries + 1) * requestTimeoutMs` plus backoff when an endpoint hangs.
+This is not an overall deadline for parallel downloads: a retried range body can
+start another request with its own transport retry budget.
 
 When a multipart upload, streaming upload, or multipart copy fails, the SDK calls `b2_cancel_large_file` on a best-effort basis. Pass `onCleanupFailure` on those operations to observe failed cancellation or a skipped cancellation after an ambiguous `b2_finish_large_file` response, with the relevant `fileId` so operators can reconcile unfinished or possibly committed large files. Pair long-running resume workflows with lifecycle or version-retention cleanup so orphaned unfinished large files do not accumulate past the bounded resume discovery scan.
 

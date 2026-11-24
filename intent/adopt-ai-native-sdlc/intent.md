@@ -27,9 +27,8 @@ harness-engineering layout rather than layered on top of a parallel one:
 - A `CODE_OF_CONDUCT.md`, GitHub issue forms, and a PR template.
 - The `intent/<slug>/` artifact chain available, mapped to `docs/exec-plans/` via
   the `sdlc-harness-translate` skill (this change dogfoods it).
-- Per-PR changelog fragments with changie, configured exactly like Backblaze/blazer
-  so every repo shares one workflow (decided during review; see
-  `intent/changelog-fragments/`).
+- Per-PR changelog fragments with changie. Landed separately in #401, which this
+  change builds on rather than duplicates.
 - A proposal, for the code owners to decide, on scaling human review by risk.
 
 ## Affected users and systems
@@ -37,16 +36,14 @@ Contributors and reviewers of `backblaze-labs/b2-sdk-typescript`; coding agents
 (Claude Code and others via `AGENTS.md`); CI.
 
 ## Constraints
-- Must not break the existing release pipeline (`cut-changelog` /
-  `extract-changelog` / `verify:metadata` / `release.yml` all parse
-  `CHANGELOG.md`): changie has to slot into it, not replace it.
+- Must not break the release pipeline (`extract-changelog` / `verify:metadata` /
+  `release.yml` and the #401 release-policy gates).
 - Must stay green under `pnpm verify` (lint, spelling, docs-consistency).
 - Do not duplicate guidance: `AGENTS.md` stays the single source of truth;
   `CLAUDE.md` / `GEMINI.md` keep pointing at it.
 
 ## Open questions
-- Adopt changie, or keep the current Keep-a-Changelog + cut/extract pipeline and
-  only add per-PR fragments? Resolved: changie, uniform with Blazer
-  (`intent/changelog-fragments/`).
+- Adopt changie, or keep the hand-edited Keep-a-Changelog pipeline? Resolved:
+  changie, adopted on `main` in #401.
 - Which review tiers and automated gates do the code owners want? Carried to
   `intent/review-tiering/`.

@@ -112,3 +112,9 @@ the matching `CONFORMANCE_*` / `RESILIENCE_*` variables, for example
 `CONFORMANCE_TARGET=simulator CONFORMANCE_SIMULATOR_URL=http://127.0.0.1:<port> ./.sdkharness/tests/conformance/files.upload.cjs`.
 Only loopback URLs and the fixed credential are accepted; never point these at a
 real B2 realm.
+
+`conformance/urls.native_download` addresses a loopback fixture hostname because
+the SDK builds native share URLs only on Backblaze download hosts. The embedded
+harness simulator and the standalone B2 simulator carry different fixture names
+in their certificates, so `tests/lib/fixture-host.cjs` picks the one the pinned
+CA actually names and fails loudly when it names none.

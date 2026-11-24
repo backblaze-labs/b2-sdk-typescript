@@ -1,0 +1,3 @@
+kind: Fixed
+body: "Streams that fit in one part finalize through the single-request upload path, forwarding only supported streaming options. At exactly one part, the provisional large file is cancelled and the retained bytes are uploaded again as a single file. Failed parts reject completion and cancel the unfinished large file even when the writer remains open."
+time: 2026-11-20T00:00:00Z

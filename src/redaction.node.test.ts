@@ -1,0 +1,541 @@
+import { Console } from 'node:console'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Writable } from 'node:stream'
+import { inspect } from 'node:util'
+import { afterEach, describe, expect, it } from 'vitest'
+import pkg from '../package.json' with { type: 'json' }
+import type { AccountInfo } from './auth/account-info.ts'
+import { FileAccountInfo } from './auth/file.ts'
+import { UploadUrlPool } from './auth/index.ts'
+import { BackupClient } from './backup/index.ts'
+import { DEFAULT_RETRY_OPTIONS } from './http/retry.ts'
+import {
+  authorizeAccountResponseForPersistence,
+  B2Client,
+  B2Object,
+  Bucket,
+  downloadAuthorizationResponseForPersistence,
+  getUploadPartUrlResponseForPersistence,
+  getUploadUrlResponseForPersistence,
+  InMemoryAccountInfo,
+} from './index.ts'
+import { InMemoryPartnerAccountInfo, PartnerClient } from './partner/index.ts'
+import { B2Simulator } from './simulator/index.ts'
+import { jsonResponse } from './test-utils/index.ts'
+import {
+  CREDENTIAL_BEARING_EXPORTS,
+  REVIEWED_EXPORTS,
+} from './test-utils/redaction-export-review.ts'
+import type { AuthorizeAccountResponse } from './types/auth.ts'
+import { BucketType } from './types/bucket.ts'
+import { type AuthToken, bucketId, largeFileId, partnerToken } from './types/ids.ts'
+
+const APP_KEY = 'SECRET-APPKEY'
+const ACCOUNT_TOKEN = 'SECRET-ACCOUNT-TOKEN'
+const UPLOAD_TOKEN = 'SECRET-UPLOAD-TOKEN'
+const PART_TOKEN = 'SECRET-PART-UPLOAD-TOKEN'
+const DOWNLOAD_TOKEN = 'SECRET-DOWNLOAD-TOKEN'
+const SECRETS = [APP_KEY, ACCOUNT_TOKEN, UPLOAD_TOKEN, PART_TOKEN, DOWNLOAD_TOKEN]
+const entry = { uploadUrl: 'https://pod.backblaze.com/upload', authorizationToken: UPLOAD_TOKEN }
+const directories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })))
+})
+
+async function fixture(store: AccountInfo = new InMemoryAccountInfo()) {
+  const sim = new B2Simulator()
+  const seed = new B2Client({
+    applicationKeyId: 'key-id',
+    applicationKey: APP_KEY,
+    transport: sim.transport(),
+  })
+  const auth = { ...(await seed.authorize()), authorizationToken: ACCOUNT_TOKEN as AuthToken }
+  const info = (
+    await seed.createBucket({ bucketName: 'diagnostic-bucket', bucketType: BucketType.AllPrivate })
+  ).info
+  const client = new B2Client({
+    applicationKeyId: 'key-id',
+    applicationKey: APP_KEY,
+    accountInfo: store,
+    transport: {
+      async send(request) {
+        if (request.url.includes('b2_get_upload_part_url')) {
+          return jsonResponse({
+            fileId: largeFileId('diagnostic-large-file-id'),
+            uploadUrl: entry.uploadUrl,
+            authorizationToken: PART_TOKEN,
+          })
+        }
+        if (request.url.includes('b2_get_upload_url')) {
+          return jsonResponse({
+            bucketId: bucketId('diagnostic-bucket-id'),
+            uploadUrl: entry.uploadUrl,
+            authorizationToken: UPLOAD_TOKEN,
+          })
+        }
+        if (request.url.includes('b2_get_download_authorization')) {
+          return jsonResponse({
+            bucketId: bucketId('diagnostic-bucket-id'),
+            fileNamePrefix: 'diagnostic',
+            authorizationToken: DOWNLOAD_TOKEN,
+          })
+        }
+        return jsonResponse(auth)
+      },
+    },
+  })
+  const bucket = new Bucket(client, info, DEFAULT_RETRY_OPTIONS)
+  return { auth, store, client, bucket, object: bucket.file('diagnostic.txt') }
+}
+
+function assertNoSecrets(rendered: string): void {
+  for (const secret of SECRETS) expect(rendered).not.toContain(secret)
+}
+
+function consoleOutput(value: unknown): string {
+  let output = ''
+  const stdout = new Writable({
+    write(chunk, _encoding, callback) {
+      output += String(chunk)
+      callback()
+    },
+  })
+  new Console({ stdout }).log(value)
+  return output
+}
+
+const surfaces = [
+  ['inspect default', (value: object) => inspect(value)],
+  [
+    'inspect hidden unlimited',
+    (value: object) => inspect(value, { depth: Infinity, showHidden: true }),
+  ],
+  ['console.log', consoleOutput],
+] as const
+
+async function fileStore() {
+  const directory = await mkdtemp(join(tmpdir(), 'b2-redaction-'))
+  directories.push(directory)
+  const path = join(directory, 'auth.json')
+  return { path, store: new FileAccountInfo(path) }
+}
+
+function poolTokens(store: AccountInfo): void {
+  store.returnUploadUrl(bucketId('diagnostic-bucket-id'), entry)
+  store.returnPartUploadUrl('large-file-id', { ...entry, authorizationToken: PART_TOKEN })
+}
+
+describe('credential redaction Node diagnostics', () => {
+  it('inspect summaries retain diagnostic provenance for all response kinds', async () => {
+    const { client, store, bucket } = await fixture()
+    const authorize = await client.authorize()
+    const upload = await client.raw.getUploadUrl(store.getApiUrl(), store.getAuthToken(), {
+      bucketId: bucketId('diagnostic-bucket-id'),
+    })
+    const part = await client.raw.getUploadPartUrl(store.getApiUrl(), store.getAuthToken(), {
+      fileId: largeFileId('diagnostic-large-file-id'),
+    })
+    const download = await bucket.getDownloadAuthorization('diagnostic', 60)
+    for (const [response, helper] of [
+      [authorize, authorizeAccountResponseForPersistence],
+      [upload, getUploadUrlResponseForPersistence],
+      [part, getUploadPartUrlResponseForPersistence],
+      [download, downloadAuthorizationResponseForPersistence],
+    ] as const) {
+      const summary = Reflect.apply(
+        Reflect.get(response, Symbol.for('nodejs.util.inspect.custom')),
+        response,
+        [],
+      )
+      expect(summary).toHaveProperty('_b2sdkDiagnostic', 'authorization-token-redacted')
+      expect(inspect(response)).toContain('_b2sdkDiagnostic')
+      expect(() => helper(JSON.parse(JSON.stringify(summary)))).toThrow(TypeError)
+    }
+  })
+
+  it.each(surfaces)('authorize response hides its token via %s', async (_name, render) => {
+    const { client } = await fixture()
+    const response = await client.authorize()
+    expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(render(response)).not.toContain(ACCOUNT_TOKEN)
+  })
+
+  it.each(surfaces)('upload URL response hides its token via %s', async (_name, render) => {
+    const { client, store } = await fixture()
+    await client.authorize()
+    const response = await client.raw.getUploadUrl(store.getApiUrl(), store.getAuthToken(), {
+      bucketId: bucketId('diagnostic-bucket-id'),
+    })
+    expect(response.authorizationToken).toBe(UPLOAD_TOKEN)
+    expect(render(response)).not.toContain(UPLOAD_TOKEN)
+  })
+
+  it.each(surfaces)('part upload URL response hides its token via %s', async (_name, render) => {
+    const { client, store } = await fixture()
+    await client.authorize()
+    const response = await client.raw.getUploadPartUrl(store.getApiUrl(), store.getAuthToken(), {
+      fileId: largeFileId('diagnostic-large-file-id'),
+    })
+    expect(response.authorizationToken).toBe(PART_TOKEN)
+    expect(render(response)).not.toContain(PART_TOKEN)
+  })
+
+  it.each(surfaces)(
+    'download authorization response hides its token via %s',
+    async (_name, render) => {
+      const { client, bucket } = await fixture()
+      await client.authorize()
+      const response = await bucket.getDownloadAuthorization('diagnostic', 60)
+      expect(response.authorizationToken).toBe(DOWNLOAD_TOKEN)
+      expect(render(response)).not.toContain(DOWNLOAD_TOKEN)
+    },
+  )
+
+  it.each(surfaces)(
+    'client summary isolates custom enumerable AccountInfo via %s',
+    async (_name, render) => {
+      const { auth } = await fixture()
+      const store = {
+        auth,
+        getAuth() {
+          return auth
+        },
+      } as unknown as AccountInfo
+      const client = new B2Client({
+        applicationKeyId: 'key-id',
+        applicationKey: APP_KEY,
+        accountInfo: store,
+      })
+      const rendered = render(client)
+      assertNoSecrets(rendered)
+      expect(rendered).toBe(render(client.toJSON()))
+    },
+  )
+
+  for (const name of ['client', 'bucket', 'object', 'store'] as const) {
+    it.each(surfaces)(
+      `${name} hides credentials before and after authorization via %s`,
+      async (_surface, render) => {
+        const value = await fixture()
+        for (const authorized of [false, true]) {
+          if (authorized) {
+            await value.client.authorize()
+            poolTokens(value.store)
+          }
+          assertNoSecrets(render(value[name]))
+        }
+      },
+    )
+  }
+
+  it('memory store inspect preserves the exact safe summary before and after setAuth', async () => {
+    const { auth, store } = await fixture()
+    expect(inspect(store)).toBe(inspect({ authorized: false }))
+    store.setAuth(auth)
+    poolTokens(store)
+    expect(inspect(store)).toBe(inspect({ authorized: true }))
+  })
+
+  it.each([
+    ['own', false],
+    ['own', true],
+    ['prototype', false],
+    ['prototype', true],
+  ] as const)(
+    'setAuth copies responses with only an inspect hook on the %s object (enumerable=%s)',
+    async (placement, enumerable) => {
+      const { auth } = await fixture()
+      const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
+      const owner = placement === 'own' ? auth : Object.create(Object.getPrototypeOf(auth))
+      if (placement === 'prototype') Object.setPrototypeOf(auth, owner)
+      Object.defineProperty(owner, inspectSymbol, {
+        value: () => ({ authorized: true }),
+        enumerable,
+      })
+      expect(Object.hasOwn(auth, 'toJSON')).toBe(false)
+      const store = new InMemoryAccountInfo()
+      store.setAuth(auth)
+      expect(store.getAuth()).not.toBe(auth)
+      expect(Object.getOwnPropertyDescriptor(store.getAuth(), inspectSymbol)).toBeUndefined()
+      expect(store.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
+      expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
+    },
+  )
+
+  it('file store inspect preserves the exact safe summary before and after setAuth', async () => {
+    const { store } = await fileStore()
+    const { auth } = await fixture()
+    expect(inspect(store)).toBe(inspect({ authorized: false }))
+    store.setAuth(auth)
+    poolTokens(store)
+    await store.flushed()
+    expect(inspect(store)).toBe(inspect({ authorized: true }))
+  })
+
+  it.each(surfaces)('direct pool hides upload tokens via %s', (_name, render) => {
+    const pool = new UploadUrlPool()
+    pool.checkin('bucket', entry)
+    pool.checkin('part', { ...entry, authorizationToken: PART_TOKEN })
+    assertNoSecrets(render(pool))
+  })
+
+  it('file store inner reference is hidden from spread', async () => {
+    const { store } = await fileStore()
+    const { auth } = await fixture()
+    store.setAuth(auth)
+    poolTokens(store)
+    await store.flushed()
+    expect(Object.keys(store)).not.toContain('inner')
+    assertNoSecrets(JSON.stringify({ ...store }))
+  })
+
+  it('file store JSON preserves a safe authorized summary', async () => {
+    const { store } = await fileStore()
+    const { auth } = await fixture()
+    expect(JSON.parse(JSON.stringify(store))).toEqual({ authorized: false })
+    store.setAuth(auth)
+    poolTokens(store)
+    await store.flushed()
+    assertNoSecrets(JSON.stringify(store))
+    expect(JSON.parse(JSON.stringify(store))).toEqual({ authorized: true })
+    store.clear()
+    await store.flushed()
+    expect(JSON.parse(JSON.stringify(store))).toEqual({ authorized: false })
+  })
+
+  it.each(surfaces)(
+    'file store hides credentials before and after authorization via %s',
+    async (_name, render) => {
+      const { store } = await fileStore()
+      const value = await fixture(store)
+      assertNoSecrets(render(store))
+      await value.client.authorize()
+      poolTokens(store)
+      await store.flushed()
+      assertNoSecrets(render(store))
+    },
+  )
+
+  it.each([false, true])(
+    'file store disk round-trip keeps the real token (bound=%s)',
+    async (bound) => {
+      const { path, store } = await fileStore()
+      const { auth } = await fixture()
+      if (bound) {
+        store.setRealmUrl('https://api.backblazeb2.com')
+        store.setApplicationKeyId('key-id')
+      }
+      store.setAuth(auth)
+      await store.flushed()
+      expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
+      const reloaded = new FileAccountInfo(path)
+      if (bound) {
+        reloaded.setRealmUrl('https://api.backblazeb2.com')
+        reloaded.setApplicationKeyId('key-id')
+      }
+      await reloaded.load()
+      expect(reloaded.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
+      expect(reloaded.getAuthToken()).toBe(ACCOUNT_TOKEN)
+      assertNoSecrets(JSON.stringify(reloaded))
+    },
+  )
+
+  it('file store persists the real token from an authorize response', async () => {
+    const { path, store } = await fileStore()
+    const { client } = await fixture(store)
+    const response = await client.authorize()
+    expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(store.getAuth()).not.toBe(response)
+    await store.flushed()
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
+  })
+
+  it('authorize passes a hook-free response to a custom AccountInfo', async () => {
+    class RecordingAccountInfo extends InMemoryAccountInfo {
+      json = ''
+      hook: PropertyDescriptor | undefined
+
+      override setAuth(auth: AuthorizeAccountResponse): void {
+        this.json = JSON.stringify(auth)
+        this.hook = Object.getOwnPropertyDescriptor(auth, 'toJSON')
+        super.setAuth(auth)
+      }
+    }
+    const store = new RecordingAccountInfo()
+    const { client } = await fixture(store)
+    const response = await client.authorize()
+    expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(JSON.parse(store.json).authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(store.hook).toBeUndefined()
+  })
+
+  it('file store persists a hook-free copy of a raw authorize response', async () => {
+    const { path, store } = await fileStore()
+    const { client } = await fixture()
+    const response = await client.raw.authorizeAccount('key-id', APP_KEY)
+    store.setAuth(response)
+    expect(store.getAuth()).not.toBe(response)
+    expect(store.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
+    await store.flushed()
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
+  })
+
+  it('file store round-trips ordinary token text matching the diagnostic label', async () => {
+    const { path, store } = await fileStore()
+    const { auth } = await fixture()
+    const token = '[redacted authorization token]'
+    store.setAuth({ ...auth, authorizationToken: token as AuthToken })
+    await store.flushed()
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(token)
+    const reloaded = new FileAccountInfo(path)
+    await reloaded.load()
+    expect(reloaded.getAuthToken()).toBe(token)
+  })
+
+  it('file store rejects incomplete response copies', async () => {
+    const { store } = await fileStore()
+    const { client } = await fixture()
+    const response = await client.authorize()
+    try {
+      expect(() => store.setAuth({ ...response })).toThrow(TypeError)
+    } finally {
+      await store.flushed()
+    }
+    expect(store.getAuth()).toBeNull()
+  })
+
+  it('file store preserves a token accessor without diagnostic hooks', async () => {
+    const { path, store } = await fileStore()
+    const { auth } = await fixture()
+    Object.defineProperty(auth, 'authorizationToken', {
+      get: () => ACCOUNT_TOKEN,
+      enumerable: false,
+    })
+    expect(Object.hasOwn(auth, 'toJSON')).toBe(false)
+    expect(Symbol.for('nodejs.util.inspect.custom') in auth).toBe(false)
+    store.setAuth(auth)
+    await store.flushed()
+    expect(store.getAuth()).not.toBe(auth)
+    expect(store.getAuthToken()).toBe(ACCOUNT_TOKEN)
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
+  })
+
+  it('file store round-trips non-enumerable authorization data', async () => {
+    const { path, store } = await fileStore()
+    const { client } = await fixture()
+    const response = await client.authorize()
+    const expected = {
+      accountId: response.accountId,
+      authorizationToken: ACCOUNT_TOKEN,
+      apiInfo: response.apiInfo,
+      applicationKeyExpirationTimestamp: response.applicationKeyExpirationTimestamp,
+    }
+    for (const key of Object.keys(response)) {
+      const value: unknown = Reflect.get(response, key)
+      Object.defineProperty(response, key, {
+        get: () => value,
+        enumerable: false,
+        configurable: true,
+      })
+    }
+    store.setAuth(response)
+    await store.flushed()
+    expect(store.getApiUrl()).toBe(expected.apiInfo.storageApi.apiUrl)
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(expected)
+    const reloaded = new FileAccountInfo(path)
+    await reloaded.load()
+    expect(reloaded.getApiUrl()).toBe(expected.apiInfo.storageApi.apiUrl)
+    expect(reloaded.getDownloadUrl()).toBe(expected.apiInfo.storageApi.downloadUrl)
+    expect(reloaded.getS3ApiUrl()).toBe(expected.apiInfo.storageApi.s3ApiUrl)
+    expect(reloaded.getRecommendedPartSize()).toBe(expected.apiInfo.storageApi.recommendedPartSize)
+    expect(reloaded.getAbsoluteMinimumPartSize()).toBe(
+      expected.apiInfo.storageApi.absoluteMinimumPartSize,
+    )
+    expect(reloaded.getAccountId()).toBe(expected.accountId)
+    expect(reloaded.getAuthToken()).toBe(ACCOUNT_TOKEN)
+    expect(reloaded.getAuth()).toEqual(expected)
+  })
+
+  it('reviewed public exports have sentinel coverage on every leak surface', async () => {
+    const { store: file } = await fileStore()
+    const { auth, client, store, bucket, object } = await fixture()
+    store.setAuth(auth)
+    file.setAuth(auth)
+    poolTokens(store)
+    poolTokens(file)
+    await file.flushed()
+    const pool = new UploadUrlPool()
+    pool.checkin('bucket', entry)
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const partnerStore = new InMemoryPartnerAccountInfo()
+    const partner = new PartnerClient({
+      masterKeyId: 'key-id',
+      masterKey: APP_KEY,
+      partnerAccountInfo: partnerStore,
+      transport: sim.transport(),
+    })
+    const partnerAuth = await new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport: sim.transport(),
+    }).authorize()
+    partnerStore.setAuth({ ...partnerAuth, authorizationToken: partnerToken(ACCOUNT_TOKEN) })
+    const backup = new BackupClient({
+      masterKeyId: 'key-id',
+      masterKey: APP_KEY,
+      partnerAccountInfo: partnerStore,
+      transport: sim.transport(),
+    })
+    const instances = new Map<unknown, object>([
+      [B2Client, client],
+      [InMemoryAccountInfo, store],
+      [FileAccountInfo, file],
+      [UploadUrlPool, pool],
+      [Bucket, bucket],
+      [B2Object, object],
+      [InMemoryPartnerAccountInfo, partnerStore],
+      [PartnerClient, partner],
+      [BackupClient, backup],
+    ])
+    const publicExports: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+      '.': await import('./index.ts'),
+      './auth': await import('./auth/index.ts'),
+      './auth/file': await import('./auth/file.ts'),
+      './backup': await import('./backup/index.ts'),
+      './errors': await import('./errors/index.ts'),
+      './notifications': await import('./notifications/index.ts'),
+      './partner': await import('./partner/index.ts'),
+      './raw': await import('./raw/index.ts'),
+      './s3': await import('./s3/index.ts'),
+      './simulator': await import('./simulator/index.ts'),
+      './streams': await import('./streams/index.ts'),
+      './sync': await import('./sync/index.ts'),
+    }
+    expect(Object.keys(publicExports).sort()).toEqual(Object.keys(pkg.exports).sort())
+    expect(Object.keys(REVIEWED_EXPORTS).sort()).toEqual(Object.keys(pkg.exports).sort())
+    const covered: string[] = []
+    for (const [path, exports] of Object.entries(publicExports)) {
+      expect(Object.keys(exports).sort(), `Exports need review at ${path}`).toEqual(
+        REVIEWED_EXPORTS[path],
+      )
+      for (const [name, exported] of Object.entries(exports)) {
+        if (!CREDENTIAL_BEARING_EXPORTS[path]?.includes(name)) continue
+        const value = instances.get(exported)
+        if (value === undefined) throw new Error(`Missing sentinel fixture for ${path}:${name}`)
+        covered.push(`${path}:${name}`)
+        for (const [, render] of surfaces) assertNoSecrets(render(value))
+        assertNoSecrets(JSON.stringify(value))
+        assertNoSecrets(JSON.stringify({ ...value }))
+      }
+    }
+    expect(covered.sort()).toEqual(
+      Object.entries(CREDENTIAL_BEARING_EXPORTS)
+        .flatMap(([path, names]) => names.map((name) => `${path}:${name}`))
+        .sort(),
+    )
+  })
+})

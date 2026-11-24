@@ -73,10 +73,13 @@ export interface ActionFactory {
  * @param direction - The sync direction.
  * @param compareMode - How to compare files for differences.
  * @param keepMode - Policy for destination-only files.
- * @param keepDays - Retention period when keepMode is 'keep-days'.
+ * @param keepDays - Required finite, non-negative retention period when keepMode is 'keep-days'.
  * @param nowMillis - Current time in milliseconds, used for keep-days calculation.
  * @param factory - Factory to create the concrete action objects.
  * @param compareThreshold - Tolerance for the comparison.
+ *
+ * @throws A `TypeError` if `keepMode` is unsupported.
+ * @throws A `RangeError` if `keep-days` has no finite, non-negative `keepDays` value.
  */
 export function* generateActions(
   pair: SyncPair,
@@ -89,6 +92,7 @@ export function* generateActions(
   compareThreshold: number,
 ): Generator<SyncAction> {
   assertSupportedCompareMode(compareMode)
+  assertValidKeepPolicy(keepMode, keepDays)
 
   const [source, dest] = pair
 
@@ -98,6 +102,27 @@ export function* generateActions(
     yield* actionsForDestOnly(dest, direction, keepMode, keepDays, nowMillis, factory)
   } else if (source !== null && dest !== null) {
     yield* actionsForBoth(source, dest, direction, compareMode, compareThreshold, factory)
+  }
+}
+
+/**
+ * Validates the destination-only file policy before planning any actions.
+ *
+ * @param keepMode - Policy for destination-only files.
+ * @param keepDays - Required finite, non-negative retention period for `keep-days`.
+ *
+ * @throws A `TypeError` if `keepMode` is unsupported.
+ * @throws A `RangeError` if `keep-days` has no finite, non-negative `keepDays` value.
+ */
+export function assertValidKeepPolicy(keepMode: unknown, keepDays: number | undefined): void {
+  if (keepMode !== 'no-delete' && keepMode !== 'delete' && keepMode !== 'keep-days') {
+    throw new TypeError(`Unsupported keepMode: ${String(keepMode)}`)
+  }
+  if (
+    keepMode === 'keep-days' &&
+    !(keepDays !== undefined && Number.isFinite(keepDays) && keepDays >= 0)
+  ) {
+    throw new RangeError('keepDays must be a finite number >= 0 when keepMode is keep-days')
   }
 }
 
@@ -133,7 +158,12 @@ function* actionsForDestOnly(
   }
 
   if (keepMode === 'keep-days') {
-    const ageMillis = nowMillis - dest.modTimeMillis
+    // B2 retention uses the version's age, independently of its source modification time.
+    const uploadedAt =
+      'selectedVersion' in dest
+        ? (dest as B2SyncPath).selectedVersion.uploadTimestamp
+        : dest.modTimeMillis
+    const ageMillis = nowMillis - uploadedAt
     const ageDays = ageMillis / (24 * 60 * 60 * 1000)
     if (ageDays < keepDays) {
       yield new SkipAction(

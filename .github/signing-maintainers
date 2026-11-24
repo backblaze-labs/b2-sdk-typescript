@@ -1,0 +1,5 @@
+# GitHub usernames whose current public GPG/SSH keys may sign release tags.
+# Enroll signing keys on GitHub before enabling ENFORCE_SIGNED_TAGS.
+goanpeca
+ffumero2003
+sophiecarreras

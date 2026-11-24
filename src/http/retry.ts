@@ -1,6 +1,12 @@
 /** Configuration for retry behavior on transient failures. */
 export interface RetryOptions {
-  /** Maximum number of retry attempts before giving up. */
+  /**
+   * Maximum retry attempts for each retry mechanism. Defaults to 5.
+   * `B2Object.createReadStream` uses separate limits for transport retries and
+   * retryable range-body failures; each repeated range request can use its own
+   * transport retry budget. Set to 0 to disable those transient retries. Expired
+   * token reauthorization is handled separately.
+   */
   readonly maxRetries: number
   /** Upper bound on retry delay in milliseconds, regardless of backoff calculation. */
   readonly maxRetryDelayMs: number
@@ -63,14 +69,15 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
       return
     }
-    const timer = setTimeout(resolve, ms)
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer)
-        reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
-      },
-      { once: true },
-    )
+    const onAbort = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 }

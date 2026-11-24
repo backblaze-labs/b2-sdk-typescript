@@ -43,6 +43,71 @@ function defaultResumeCriteria(
 }
 
 describe('findResumeCandidate', () => {
+  it.each([
+    { name: 'different digests', candidateSha1: 'old', requestedSha1: 'new', matches: false },
+    { name: 'equal digests', candidateSha1: 'same', requestedSha1: 'same', matches: true },
+    {
+      name: 'candidate digest only',
+      candidateSha1: 'old',
+      requestedSha1: undefined,
+      matches: true,
+    },
+    {
+      name: 'requested digest only',
+      candidateSha1: undefined,
+      requestedSha1: 'new',
+      matches: true,
+    },
+    { name: 'neither digest', candidateSha1: undefined, requestedSha1: undefined, matches: true },
+  ])('compares whole-file SHA-1 metadata: $name', async (scenario) => {
+    const rejected: string[] = []
+    let partsListed = false
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'candidate',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {
+                owner: 'unit',
+                ...(scenario.candidateSha1 !== undefined
+                  ? { large_file_sha1: scenario.candidateSha1 }
+                  : {}),
+              },
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        partsListed = true
+        return { parts: [], nextPartNumber: null }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      defaultResumeCriteria({
+        fileInfo: {
+          owner: 'unit',
+          ...(scenario.requestedSha1 !== undefined
+            ? { large_file_sha1: scenario.requestedSha1 }
+            : {}),
+        },
+        onCandidateRejected: (event) => rejected.push(event.reason),
+      }),
+    )
+
+    expect(result?.fileId ?? null).toBe(scenario.matches ? 'candidate' : null)
+    expect(rejected).toEqual(scenario.matches ? [] : ['file-info-mismatch'])
+    expect(partsListed).toBe(scenario.matches)
+  })
+
   it('returns null when no unfinished file matches the destination name', async () => {
     const raw = {
       async listUnfinishedLargeFiles() {

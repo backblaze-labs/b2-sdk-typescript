@@ -34,7 +34,7 @@ Authoring guidance lives in [`AGENTS.md`](AGENTS.md); release steps in
 ## The one gate
 
 `pnpm verify` is the single local command that mirrors CI (lint, lint:docs,
-lint:spelling, changelog:lint, typecheck, tests, build, exports, docs
+lint:spelling, review:test, typecheck, tests, build, exports, docs
 consistency, release checks). A change is not "done" until it is green. CI
 re-runs the same gate on Linux + Windows + macOS plus `bun test src/` and the
 browser matrix.
@@ -44,10 +44,11 @@ browser matrix.
 - **Changelog.** Every user-visible change adds a changie fragment
   (`pnpm run changelog:new`) under `.changes/unreleased/`; never hand-edit the
   generated `CHANGELOG.md`. Breaking changes start the entry with `BREAKING:` and
-  say what callers must change. The `changelog` check enforces this for non-test
-  `src/` changes; reviewers catch user-visible changes outside `src/` (such as
-  `package.json` exports or engines). See
-  [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries).
+  say what callers must change. No check requires a fragment, so reviewers catch
+  a missing one, including user-visible changes outside `src/` (such as
+  `package.json` exports or engines); `pnpm changelog:check` catches a
+  hand-edited `CHANGELOG.md`. See [CONTRIBUTING.md](CONTRIBUTING.md) and
+  [RELEASE.md](RELEASE.md).
 - **Tests fail when the fix is reverted.** Never skip or delete a failing test,
   and never lower a coverage threshold, to go green.
 - **Isomorphic tests.** `**/*.test.ts` run in Node and the browser, so they may
@@ -112,8 +113,9 @@ this file.
 ## Reviewer checklist
 
 1. Does `pnpm verify` pass (CI green)?
-2. Is there a `.changes/unreleased/` fragment, `BREAKING:`-tagged if it breaks
-   callers (or a justified `skip-changelog` label)?
+2. Is there a `.changes/unreleased/` fragment for a user-facing change,
+   `BREAKING:`-tagged if it breaks callers, and are the PR and issue on the
+   target `vX.Y.Z` milestone?
 3. Do the tests fail when the change is reverted? Are new `**/*.test.ts`
    isomorphic?
 4. Do response-shape / simulator changes match the cited B2 docs?

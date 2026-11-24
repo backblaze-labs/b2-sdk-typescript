@@ -247,8 +247,7 @@ describe('copyLargeFile (slow)', () => {
     expect(copied.fileName).toBe('inherit-dst.bin')
     expect(startBodies.length).toBe(1)
     expect(startBodies[0]?.['contentType']).toBe('image/png')
-    // Default fileInfo is the empty object when no override is supplied.
-    expect(startBodies[0]?.['fileInfo']).toEqual({})
+    expect(startBodies[0]?.['fileInfo']).toEqual(uploaded.fileInfo)
     // No SSE override means the field is omitted from start_large_file.
     expect(startBodies[0]?.['serverSideEncryption']).toBeUndefined()
   })

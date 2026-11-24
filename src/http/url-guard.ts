@@ -17,6 +17,7 @@
  *   2. Well-known internal hostnames (`localhost`, `metadata`,
  *      `metadata.google.internal`, `.internal`, `.local`).
  *   3. Hosts not matching any allowed suffix once the SDK is locked.
+ *   4. Non-HTTPS URLs on otherwise allowed hosts.
  *
  * Users supplying a custom `transport` to `B2Client` bypass the guard. That
  * is their responsibility to document for their threat model.
@@ -67,9 +68,9 @@ export class UrlGuard {
 
   /**
    * Validate `rawUrl` against the allow-list. Throws {@link B2SsrfError} if
-   * the URL points at a literal IP, a known-internal hostname, or a host
-   * outside the allowed suffixes. Permissive (no-op) when no suffixes have
-   * been configured yet.
+   * the URL points at a literal IP, a known-internal hostname, a host outside
+   * the allowed suffixes, or a non-HTTPS URL. Permissive (no-op) when no
+   * suffixes have been configured yet.
    *
    * @param rawUrl - The URL the caller is about to fetch.
    *
@@ -98,12 +99,19 @@ export class UrlGuard {
       throw new B2SsrfError(`internal hostname not allowed by SSRF guard: ${host}`, rawUrl)
     }
 
-    if (hostMatchesAnyAllowedSuffix(host, this.allowedSuffixes)) return
+    if (!hostMatchesAnyAllowedSuffix(host, this.allowedSuffixes)) {
+      throw new B2SsrfError(
+        `host outside allowed B2 realm: ${host} (allowed suffixes: ${this.allowedSuffixes.join(', ')})`,
+        rawUrl,
+      )
+    }
 
-    throw new B2SsrfError(
-      `host outside allowed B2 realm: ${host} (allowed suffixes: ${this.allowedSuffixes.join(', ')})`,
-      rawUrl,
-    )
+    if (parsed.protocol !== 'https:') {
+      throw new B2SsrfError(
+        `non-HTTPS URL not allowed by SSRF guard: ${parsed.protocol} on ${host}; use an HTTPS URL or a custom transport.`,
+        rawUrl,
+      )
+    }
   }
 }
 

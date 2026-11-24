@@ -18,7 +18,7 @@ the [setup checklist](#repo-admin-setup).
 | 1 | Verification before the PR | `pnpm verify` (the full CI mirror); the Biome format hook in [`.claude/settings.json`](../.claude/settings.json); `/code-review`, `/security-review` or the [`reviewer`](../.claude/agents/reviewer.md) subagent on the diff in a fresh context; [`AGENTS.md`](../AGENTS.md) kept short, [`REVIEW.md`](../REVIEW.md) owned by the code owners. |
 | 2 | AI review on every PR | The `claude-review` job in [`ai-review.yml`](../.github/workflows/ai-review.yml), following the REVIEW.md contract (severity tags, evidence, nit cap, rounds, no reposts). Copilot review also runs. Alternatively, an admin enables managed Code Review for Claude Code with Quick, Standard or Deep depth (**admin**). |
 | 3 | Security review on every PR | The `security-review` job in `ai-review.yml`, with SDK-specific guidance in [`security-review-instructions.txt`](../.github/security-review-instructions.txt); CodeQL, zizmor and the dependency audit in `security.yml`. |
-| 4 | Blocking automated checks | `ci.yml` (lint, typecheck, tests on Linux, macOS and Windows, Bun, browsers, build, exports), `changelog`, `security`, `review-risk`. Blocking requires them as required checks (**admin**). The PR template asks for Testing, Risk and How to revert. |
+| 4 | Blocking automated checks | `ci.yml` (lint, typecheck, tests on Linux, macOS and Windows, Bun, browsers, build, exports, `changelog:check`), `security`, `review-risk`. Blocking requires them as required checks (**admin**). The PR template asks for Testing, Risk and How to revert. |
 | 5 | Risk-tiered human approval | The `review-risk` check with [`.github/review-policy.json`](../.github/review-policy.json) (see [Risk tiers](#risk-tiers)), [`CODEOWNERS`](../.github/CODEOWNERS) for paths that always need a person. |
 | 6 | Merge queue and staged release | Releases go to the `next` dist-tag before `latest` ([RELEASE.md](../RELEASE.md)). A merge queue re-runs checks against current `main` (**admin**). |
 | 7 | Detection and rollback | Small PRs, `npm dist-tag` rollback and `git revert` ([RELEASE.md](../RELEASE.md)); live-B2 integration runs; the weekly `review-metrics` report. Every revert or incident asks which layer should have caught it, then adds a lesson and an eval. |
@@ -100,14 +100,14 @@ These need repo or organization admin rights:
       enable managed Code Review for Claude Code on this repo and pick its depth
       (Deep for `src/auth`, `src/http`, `src/raw`).
 - [ ] Ruleset on `main`: require a pull request; require status checks (`ci`
-      jobs, `changelog`, the `review-risk` status, `security`); require conversation
+      jobs, the `review-risk` status, `security`); require conversation
       resolution (every finding answered); dismiss stale approvals on new
       commits; require code-owner review; block force pushes.
 - [ ] Require approval for workflow runs from outside contributors (PR content is
       untrusted input to the AI reviewers, and a PR workflow could post a
       look-alike check); never approve runs for a PR that edits `.github/workflows/`
       without reading it.
-- [ ] Create the `skip-changelog` and `needs-human-review` labels.
+- [ ] Create the `needs-human-review` label.
 - [ ] Optionally enable the merge queue, and re-enable the Copilot review ruleset
       or rely on `ai-review.yml` alone.
 - [ ] Keep `trustedAuthors` and `authorizedReviewers` in the policy and owners in

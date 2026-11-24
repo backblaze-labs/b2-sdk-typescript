@@ -20,6 +20,7 @@ import {
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from './finish.ts'
+import { assertPartLimit } from './part-limit.ts'
 import {
   findResumeCandidate,
   type ResumeCandidateCriteria,
@@ -28,6 +29,7 @@ import {
 } from './resume.ts'
 import {
   resolveRetryResponseBodyFailures,
+  resolveRetryUploadConnectionFaults,
   type UploadRetryOptions,
   uploadPartWithFreshUrl,
 } from './retry.ts'
@@ -247,12 +249,18 @@ export async function uploadLargeFile(
   accountInfo: AccountInfo,
   options: UploadLargeFileOptions,
 ): Promise<FileVersion> {
+  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
+  if (!Number.isInteger(concurrency) || concurrency <= 0) {
+    throw new RangeError(
+      `uploadLargeFile: concurrency must be a positive integer; got ${concurrency}.`,
+    )
+  }
   const recommendedPartSize = accountInfo.getRecommendedPartSize()
   const minPartSize = accountInfo.getAbsoluteMinimumPartSize()
   const partSize = Math.max(options.partSize ?? recommendedPartSize, minPartSize)
-  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.source.size
 
+  assertPartLimit(Math.ceil(totalSize / partSize))
   const parts = planRanges(totalSize, partSize)
   // Keep caller fileInfo on a null-prototype record so resume identity
   // comparison only sees caller-owned enumerable keys.
@@ -265,6 +273,20 @@ export async function uploadLargeFile(
   if (options.lastModifiedMillis !== undefined) {
     fileInfo['src_last_modified_millis'] = String(options.lastModifiedMillis)
   }
+  if (fileInfo['large_file_sha1'] === undefined && options.source.canSlice) {
+    const wholeFileSha1 = new IncrementalSha1()
+    for (const part of parts) {
+      options.signal?.throwIfAborted()
+      const data = new Uint8Array(
+        await options.source
+          .slice(part.offset, part.offset + part.length)
+          .toArrayBuffer(options.signal !== undefined ? { signal: options.signal } : {}),
+      )
+      await wholeFileSha1.update(data)
+    }
+    fileInfo['large_file_sha1'] = await wholeFileSha1.digest()
+  }
+  const resumeFileInfo = { ...fileInfo }
 
   // Construct the `b2_start_large_file` request body once so the two
   // non-resume branches below (no `resume`, resume-but-no-candidate)
@@ -285,7 +307,7 @@ export async function uploadLargeFile(
   }
   const resumeCandidateCriteria = createResumeCandidateCriteria(
     options,
-    startLargeFileRequest,
+    { ...startLargeFileRequest, fileInfo: resumeFileInfo },
     totalSize,
     partSize,
     parts,
@@ -451,6 +473,9 @@ export async function uploadLargeFile(
           onUploadRetry: options.onUploadRetry,
           retryResponseBodyFailures: resolveRetryResponseBodyFailures(
             options.retryResponseBodyFailures,
+          ),
+          retryUploadConnectionFaults: resolveRetryUploadConnectionFaults(
+            options.retryUploadConnectionFaults,
           ),
           ...(options.serverSideEncryption !== undefined
             ? { serverSideEncryption: options.serverSideEncryption }
@@ -628,6 +653,9 @@ async function uploadPartsSequentially(
         onUploadRetry: options.onUploadRetry,
         retryResponseBodyFailures: resolveRetryResponseBodyFailures(
           options.retryResponseBodyFailures,
+        ),
+        retryUploadConnectionFaults: resolveRetryUploadConnectionFaults(
+          options.retryUploadConnectionFaults,
         ),
         ...(options.serverSideEncryption !== undefined
           ? { serverSideEncryption: options.serverSideEncryption }

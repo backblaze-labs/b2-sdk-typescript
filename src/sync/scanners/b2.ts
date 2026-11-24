@@ -136,6 +136,9 @@ export class B2Folder implements SyncFolder {
           )
         }
 
+        // Unfinished uploads are neither sync sources nor orphan-deletion candidates.
+        if (fv.action === FileAction.Start) continue
+
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before
         // stripping the raw prefix so relativePath is never corrupted.
@@ -223,9 +226,15 @@ export class B2Folder implements SyncFolder {
       // Reserved SDK temp names are a hard safety failure, not an ordinary filter.
       assertSyncPathAllowed(relativePath)
       const contentSha1 = selectB2ComparableSha1(selectedVersion)
+      const storedModTime = selectedVersion.fileInfo['src_last_modified_millis']
+      const sourceModTime =
+        storedModTime !== undefined && /^\d+$/.test(storedModTime) ? Number(storedModTime) : NaN
       yield {
         relativePath,
-        modTimeMillis: selectedVersion.uploadTimestamp,
+        modTimeMillis:
+          Number.isSafeInteger(sourceModTime) && sourceModTime >= 0
+            ? sourceModTime
+            : selectedVersion.uploadTimestamp,
         size: selectedVersion.contentLength,
         contentSha1,
         contentSha1State: syncSha1StateOf({ contentSha1 }),

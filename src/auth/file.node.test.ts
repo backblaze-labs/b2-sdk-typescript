@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process'
 import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
@@ -42,6 +44,101 @@ function makeCachedAuth(
       },
     },
     applicationKeyExpirationTimestamp: null,
+  }
+}
+
+function observeCredentialWrite(path: string, failure = '') {
+  // Keep built-in instrumentation in a child so other tests use the real exports.
+  const result = spawnSync(
+    'node',
+    [
+      '--import',
+      'tsx',
+      '--input-type=module',
+      '--eval',
+      `
+        import fs from 'node:fs/promises';
+        import { readFileSync } from 'node:fs';
+        import { syncBuiltinESMExports } from 'node:module';
+        import { dirname } from 'node:path';
+        const [source, path, failure] = process.argv.slice(1);
+        const auth = JSON.parse(readFileSync(0, 'utf8'));
+        const events = [], creationModes = [], descriptorModes = [], errors = [];
+        let pathModes = 0, modeBeforeRename = null;
+        const open = fs.open, chmod = fs.chmod, rename = fs.rename;
+        if (failure) await fs.writeFile(path, 'previous state');
+        if (process.platform !== 'win32') process.umask(0o777);
+        fs.chmod = async (...args) => {
+          if (args[0] !== dirname(path)) pathModes++;
+          return chmod(...args);
+        };
+        fs.open = async (...args) => {
+          const handle = await open(...args);
+          creationModes.push(args[2]);
+          events.push('open');
+          const chmod = handle.chmod.bind(handle);
+          const writeFile = handle.writeFile.bind(handle);
+          const close = handle.close.bind(handle);
+          handle.chmod = async (mode) => {
+            events.push('mode');
+            descriptorModes.push(mode);
+            if (failure === 'mode') throw new Error('mode did not complete');
+            return chmod(mode);
+          };
+          handle.writeFile = async (...args) => {
+            events.push('write');
+            if (failure === 'write') throw new Error('write did not complete');
+            return writeFile(...args);
+          };
+          handle.close = async () => {
+            events.push('close');
+            return close();
+          };
+          return handle;
+        };
+        fs.rename = async (from, to) => {
+          modeBeforeRename = (await fs.stat(from)).mode & 0o777;
+          events.push('rename');
+          return rename(from, to);
+        };
+        syncBuiltinESMExports();
+        const { FileAccountInfo } = await import(source);
+        const store = new FileAccountInfo(path, {
+          onWriteError: ({ error }) => errors.push(error.message),
+        });
+        store.setAuth(auth);
+        await store.flushed();
+        const contents = await fs.readFile(path, 'utf8');
+        console.log(JSON.stringify({ events, creationModes, descriptorModes, pathModes,
+          modeBeforeRename, finalMode: (await fs.stat(path)).mode & 0o777,
+          contentsMatch: contents === (failure ? 'previous state' : JSON.stringify(auth)),
+          files: await fs.readdir(dirname(path)), errors }));
+      `,
+      new URL('./file.ts', import.meta.url).href,
+      path,
+      failure,
+    ],
+    {
+      cwd: fileURLToPath(new URL('../../', import.meta.url)),
+      encoding: 'utf8',
+      env: { ...process.env, TSX_DISABLE_CACHE: '1' },
+      input: JSON.stringify(makeCachedAuth()),
+      timeout: 10_000,
+    },
+  )
+  expect(result.error).toBeUndefined()
+  expect(result.stderr).toBe('')
+  expect(result.status).toBe(0)
+  return JSON.parse(result.stdout) as {
+    events: string[]
+    creationModes: number[]
+    descriptorModes: number[]
+    pathModes: number
+    modeBeforeRename: number | null
+    finalMode: number
+    contentsMatch: boolean
+    files: string[]
+    errors: string[]
   }
 }
 
@@ -196,6 +293,49 @@ describe('FileAccountInfo', () => {
 
     expect((await stat(storePath)).mode & 0o777).toBe(0o600)
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'creates and tightens the credential directory to mode 0700',
+    async () => {
+      const directory = join(tempDir, 'credentials')
+      const first = new FileAccountInfo(join(directory, 'auth.json'))
+      first.setAuth(makeCachedAuth())
+      await first.flushed()
+      expect((await stat(directory)).mode & 0o777).toBe(0o700)
+      await chmod(directory, 0o755)
+      first.setAuth(makeCachedAuth())
+      await first.flushed()
+      expect((await stat(directory)).mode & 0o777).toBe(0o700)
+    },
+  )
+
+  it('credential file is created with mode 0600 on its open descriptor', () => {
+    const observed = observeCredentialWrite(storePath)
+    expect(observed.events).toEqual(['open', 'mode', 'write', 'close', 'rename'])
+    expect(observed.creationModes).toEqual([0o600])
+    expect(observed.descriptorModes).toEqual([0o600])
+    expect(observed.pathModes).toBe(0)
+    expect(observed.contentsMatch).toBe(true)
+    expect(observed.files).toEqual(['auth.json'])
+    expect(observed.errors).toEqual([])
+    if (process.platform !== 'win32') {
+      expect(observed.modeBeforeRename).toBe(0o600)
+      expect(observed.finalMode).toBe(0o600)
+    }
+  })
+
+  it.each(['mode', 'write'])(
+    'retains the prior credential file when descriptor %s fails',
+    (failure) => {
+      const observed = observeCredentialWrite(storePath, failure)
+      expect(observed.events).toEqual(
+        failure === 'mode' ? ['open', 'mode', 'close'] : ['open', 'mode', 'write', 'close'],
+      )
+      expect(observed.contentsMatch).toBe(true)
+      expect(observed.files).toEqual(['auth.json'])
+      expect(observed.errors).toEqual([`${failure} did not complete`])
+    },
+  )
 
   it('replaces a broadly-readable cache file with a private atomic write', async () => {
     await writeFile(storePath, '{"stale":true}', { encoding: 'utf8', mode: 0o666 })

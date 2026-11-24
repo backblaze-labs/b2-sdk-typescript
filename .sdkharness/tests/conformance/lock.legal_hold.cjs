@@ -273,8 +273,8 @@ async function run() {
         'metadata reports legalHold ' + JSON.stringify(held.legalHold) + ', expected on');
     }
 
-    // The refusal must name the legal hold (HTTP 400/403 from the lock layer),
-    // not any thrown error.
+    // The refusal must match the simulator's access-denied response or the
+    // hold-specific 400/403 response, not any thrown error.
     const refusal = await guard.capture(() =>
       bucket.deleteFileVersion(OBJECT_NAME, uploaded.fileId));
     if (!refusal) {
@@ -286,6 +286,9 @@ async function run() {
       statuses: [400, 403],
       codes: ['file_lock_legal_hold_protected'],
       message: /legal.?hold/i,
+    }) && guard.explainMismatch(refusal, {
+      statuses: [401],
+      codes: ['access_denied'],
     });
     if (wrong) {
       throw new Failure('delete under hold', 'refused for the wrong reason: ' + wrong);

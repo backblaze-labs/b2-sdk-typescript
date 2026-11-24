@@ -575,6 +575,53 @@ describe('B2Client SSRF guard', () => {
     }
   })
 
+  it('rejects a plaintext apiUrl returned by authorize before the next request', async () => {
+    const { B2SsrfError } = await import('./errors/index.ts')
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn(async (url: string | URL) => {
+      const href = typeof url === 'string' ? url : url.toString()
+      if (href.startsWith('https://api.backblazeb2.com/b2api/v4/b2_authorize_account')) {
+        return new Response(
+          JSON.stringify({
+            accountId: 'a',
+            authorizationToken: 't',
+            apiInfo: {
+              storageApi: {
+                apiUrl: 'http://api.us-west-004.backblazeb2.com',
+                downloadUrl: 'https://f004.backblazeb2.com',
+                s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
+                absoluteMinimumPartSize: 5_000_000,
+                recommendedPartSize: 100_000_000,
+                capabilities: [Capability.ListBuckets],
+                bucketId: null,
+                bucketName: null,
+                namePrefix: null,
+              },
+            },
+            applicationKeyExpirationTimestamp: null,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      throw new Error(`unexpected fetch: ${href}`)
+    })
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        retry: { maxRetries: 0 },
+      })
+      await client.authorize()
+
+      await expect(client.listBuckets()).rejects.toBeInstanceOf(B2SsrfError)
+      expect(fetchSpy).toHaveBeenCalledOnce()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('merges user-supplied allowedHostSuffixes with the auto-derived set', async () => {
     const { vi } = await import('vitest')
     const originalFetch = globalThis.fetch

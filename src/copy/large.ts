@@ -11,6 +11,7 @@ import {
 } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from '../upload/finish.ts'
+import { assertPartLimit } from '../upload/part-limit.ts'
 import { raceWithAbort } from '../util/abort.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
@@ -30,9 +31,12 @@ export interface CopyLargeFileOptions {
    * {@link DEFAULT_TRANSFER_CONCURRENCY}.
    */
   readonly concurrency?: number
-  /** MIME type for the destination file. Defaults to `b2/x-auto`. */
+  /** MIME type for the destination file. Defaults to the source's type, or `b2/x-auto` if unavailable. */
   readonly contentType?: string
-  /** Custom file info merged into the destination. */
+  /**
+   * Replacement custom file info. Omit to inherit the source's file info;
+   * an explicit empty object removes all custom file info.
+   */
   readonly fileInfo?: Record<string, string>
   /** Server-side encryption applied to the destination. */
   readonly destinationServerSideEncryption?: EncryptionSetting
@@ -106,7 +110,7 @@ export async function copyLargeFile(
           ? {
               metadataDirective: MetadataDirective.Replace,
               contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
-              fileInfo: options.fileInfo ?? {},
+              fileInfo: options.fileInfo ?? sourceInfo.fileInfo ?? {},
             }
           : {}),
         ...(options.destinationServerSideEncryption !== undefined
@@ -124,6 +128,7 @@ export async function copyLargeFile(
   // are already typed `BucketId`, so no cast is needed.
   const destBucketId = options.destinationBucketId ?? sourceInfo.bucketId
 
+  assertPartLimit(Math.ceil(totalSize / partSize))
   const ranges = planRanges(totalSize, partSize)
   const partSha1s: string[] = new Array(ranges.length)
   const sem = new Semaphore(concurrency)
@@ -139,7 +144,7 @@ export async function copyLargeFile(
         bucketId: destBucketId,
         fileName: options.fileName,
         contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
-        fileInfo: options.fileInfo ?? {},
+        fileInfo: options.fileInfo ?? sourceInfo.fileInfo ?? {},
         ...(options.destinationServerSideEncryption !== undefined
           ? { serverSideEncryption: options.destinationServerSideEncryption }
           : {}),

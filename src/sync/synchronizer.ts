@@ -2,7 +2,7 @@ import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
 import { type ContentSource, FileSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
-import { fileId as fileIdOf } from '../types/ids.ts'
+import { FileAction } from '../types/file.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { sanitizeErrorReason } from '../util/error-reason.ts'
 import type { SyncAction } from './actions/index.ts'
@@ -42,7 +42,7 @@ import {
   readyComparePair,
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
-import { generateActions } from './policies/index.ts'
+import { assertValidKeepPolicy, generateActions } from './policies/index.ts'
 import { asRawB2KeyPrefix, b2KeyToRelativePathUnderPrefix } from './prefix.ts'
 import {
   DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
@@ -63,6 +63,7 @@ import type {
 const MAX_BUFFERED_SCAN_EVENTS = 100
 const MAX_AGGREGATE_FAILED_PATHS = 100
 const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MILLIS = 60_000
+const MAX_SINGLE_COPY_SIZE = 5_000_000_000
 
 interface ScanEventBuffer {
   readonly events: SyncEvent[]
@@ -210,6 +211,9 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  * @param config - The synchronizer configuration (source, dest, options, and optional bucket).
  *
  * @returns An async generator that yields comparison and action events.
+ *
+ * @throws A `TypeError` on iteration if `keepMode` is unsupported.
+ * @throws A `RangeError` on iteration if `keep-days` has no finite, non-negative `keepDays` value.
  */
 export function synchronize(config: SupportedSynchronizerConfig): AsyncGenerator<SyncEvent>
 /**
@@ -230,6 +234,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const direction = resolveDirection(source, dest)
   const dryRun = options.dryRun ?? false
   const concurrency = normalizeSyncConcurrency(options.concurrency)
+  assertValidKeepPolicy(options.keepMode, options.keepDays)
   const keepDays = options.keepDays ?? 0
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()
@@ -890,6 +895,7 @@ function createActionFactory(
           await bucket.upload({
             fileName,
             source: fileSource,
+            lastModifiedMillis: source.modTimeMillis,
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
             signal: actionSignal(signal),
           })
@@ -990,10 +996,20 @@ function createActionFactory(
       return new DeleteRemoteAction(
         path.relativePath,
         path.selectedVersion.fileId as string,
-        async (fileId, _fileName, signal) => {
-          await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId), {
-            signal: actionSignal(signal),
-          })
+        async (_fileId, _fileName, signal) => {
+          // Removing only the selected version exposes an older orphan version.
+          // Custom scanners can include unfinished uploads; preserve those too.
+          const versionIds = new Set(
+            [path.selectedVersion, ...path.allVersions]
+              .filter((version) => version.action !== FileAction.Start)
+              .map((version) => version.fileId),
+          )
+          for (const versionId of versionIds) {
+            actionSignal(signal).throwIfAborted()
+            await bucket.deleteFileVersion(b2FileName, versionId, {
+              signal: actionSignal(signal),
+            })
+          }
         },
       )
     },
@@ -1047,7 +1063,7 @@ function createActionFactory(
       const sourceServerSideEncryption = toSseCEncryptionSetting(
         config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
       )
-      await bucket.copyFile({
+      const copyOptions = {
         sourceFileId: source.selectedVersion.fileId,
         fileName: targetPath,
         ...(destinationServerSideEncryption !== undefined
@@ -1055,7 +1071,12 @@ function createActionFactory(
           : {}),
         ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
         signal: actionSignal(signal),
-      })
+      }
+      if (source.selectedVersion.contentLength > MAX_SINGLE_COPY_SIZE) {
+        await bucket.copyLargeFile(copyOptions)
+      } else {
+        await bucket.copyFile(copyOptions)
+      }
     })
   }
 

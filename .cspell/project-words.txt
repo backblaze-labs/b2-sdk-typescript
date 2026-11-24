@@ -23,6 +23,7 @@ bzinfo
 # ── 2. Tooling, libraries, runtimes ───────────────────────────────────
 biome
 biomejs
+Changie
 Codespaces
 cspell
 deno
@@ -528,3 +529,7 @@ walkthroughs
 changie
 evals
 sdlc
+
+# Release maintainer GitHub username fragments.
+ffumero
+goanpeca
