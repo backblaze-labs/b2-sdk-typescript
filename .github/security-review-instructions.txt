@@ -1,0 +1,10 @@
+This is the official Backblaze B2 SDK for TypeScript (isomorphic: Node, browsers, Bun, Deno, edge runtimes). Past security findings on this repo cluster in these areas; check each changed file against them:
+
+- Credential-bearing URLs: any URL that receives an authorization token or Basic credentials must be absolute HTTPS (plain HTTP only for loopback), with no userinfo, query or fragment. Cached-auth paths must run the same realm checks as fresh authorization (src/auth, src/http/url-guard.ts, src/partner).
+- Secret exposure: application keys, SSE-C keys and tokens must never reach error messages, logs, console output or examples' stdout. URLs in errors must have userinfo redacted. Redacting objects (toJSON) must not be rebuilt.
+- Header injection: caller strings placed in HTTP headers (Authorization, X-Bz-*, Content-Disposition) must reject control bytes, on every upload entry point.
+- Local filesystem (src/sync, src/streams): B2 keys mapped to local paths must not escape the sync root (leading /, .., drive prefixes, backslashes, symlinks, TOCTOU between check and open). Writes go through file descriptors with exclusive create; deletes fail closed.
+- Prototype pollution: dictionaries built from API responses, headers, fileInfo or query parameters must use Object.create(null).
+- ReDoS: regexes applied to caller or server input must not backtrack polynomially.
+- Simulator authorization (src/simulator): scoped keys must not be able to reach other buckets, prefixes or admin APIs; tokens must not be forgeable.
+- CI workflows: no PR-head checkout under pull_request_target, no secrets on fork PRs, destructive flags only on workflow_dispatch, pinned action SHAs.

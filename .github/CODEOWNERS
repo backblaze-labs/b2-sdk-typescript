@@ -1,0 +1,22 @@
+# Paths that always need a person (docs/review-process.md, Layer 5). Enforced once
+# branch protection requires code-owner review. Later rules override earlier ones.
+# No catch-all: low-risk paths keep the zero-approval path from review-policy.json.
+
+# CI, review policy and release tooling
+/.github/                           @goanpeca @ffumero2003 @sophiecarreras
+/.github/ISSUE_TEMPLATE/
+/.github/PULL_REQUEST_TEMPLATE.md
+/scripts/                           @goanpeca @ffumero2003
+/package.json                       @goanpeca @ffumero2003
+/.changie.yaml                      @goanpeca @ffumero2003
+
+# Credentials, wire protocol and signing
+/src/auth/                          @goanpeca @ffumero2003
+/src/http/                          @goanpeca @ffumero2003
+/src/raw/                           @goanpeca @ffumero2003
+/src/s3/                            @goanpeca @ffumero2003
+/src/partner/                       @goanpeca @ffumero2003
+/src/backup/                        @goanpeca @ffumero2003
+
+# Local filesystem writes and deletes
+/src/sync/                          @goanpeca @ffumero2003

@@ -12,6 +12,7 @@ can't see it — so it doesn't exist. The entry point for agents is
 | [`design-docs/core-beliefs.md`](design-docs/core-beliefs.md) | Agent-first operating principles for this repo. |
 | [`QUALITY_SCORE.md`](QUALITY_SCORE.md) | Per-domain quality grades + tracked gaps. |
 | [`exec-plans/`](exec-plans/) | First-class plans: [active](exec-plans/active/), [completed](exec-plans/completed/), [tech-debt-tracker](exec-plans/tech-debt-tracker.md). |
+| [`review-process.md`](review-process.md) | Review layers, risk tiers, review metrics and the repo-admin setup behind [`../REVIEW.md`](../REVIEW.md). |
 | [`references/`](references/) | External notes / reference material (e.g. the harness-engineering notes). |
 | `../api-docs/` | Generated TypeDoc reference (`pnpm docs`; not versioned). |
 
