@@ -349,18 +349,23 @@ describe('uploadSmallFile edge cases', () => {
 
   it('passes fileRetention and legalHold through to upload', async () => {
     const data = new TextEncoder().encode('locked')
+    const lockedBucket = await client.createBucket({
+      bucketName: 'locked-upload',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+    })
+    const retention = { mode: RetentionMode.Compliance, retainUntilTimestamp: daysFromNow(1) }
     const result = await uploadSmallFile(client.raw, client.accountInfo, {
-      bucketId: bucket.id,
+      bucketId: lockedBucket.id,
       fileName: 'locked.txt',
       source: new BufferSource(data),
-      fileRetention: {
-        mode: RetentionMode.Compliance,
-        retainUntilTimestamp: daysFromNow(1),
-      },
+      fileRetention: retention,
       legalHold: LegalHoldValue.On,
     })
 
     expect(result.fileName).toBe('locked.txt')
+    expect(result.fileRetention.value).toEqual(retention)
+    expect(result.legalHold.value).toBe(LegalHoldValue.On)
   })
 
   it('reuses upload URLs across multiple uploads', async () => {
