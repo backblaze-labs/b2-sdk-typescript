@@ -1,0 +1,3 @@
+kind: Fixed
+body: "The simulator applies Object Lock retention and legal hold to small uploads and copies, including destination bucket defaults."
+time: 2026-11-24T00:00:00Z

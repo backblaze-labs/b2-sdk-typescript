@@ -2134,6 +2134,52 @@ export class B2Simulator {
     return this.error(400, 'file_lock_not_enabled', 'Bucket does not have file lock enabled')
   }
 
+  private resolveSmallFileLock(
+    bucket: StoredBucket,
+    retention: unknown,
+    legalHold: unknown,
+    uploadTimestamp: number,
+    capabilities: readonly Capability[] | undefined,
+  ):
+    | { fileRetention: FileRetentionValue | null; legalHold: LegalHoldValue | null }
+    | SimulatorJsonResponse {
+    if (this.strictAuth) {
+      const needed = [
+        ...(retention !== undefined ? [Capability.WriteFileRetentions] : []),
+        ...(legalHold !== undefined ? [Capability.WriteFileLegalHolds] : []),
+      ]
+      const missing = needed.filter((capability) => !capabilities?.includes(capability))
+      if (missing.length > 0) {
+        return this.error(
+          403,
+          'unauthorized',
+          `application key lacks required capabilities: ${missing.join(', ')}`,
+        )
+      }
+    }
+    if (retention !== undefined || legalHold !== undefined) {
+      const lockError = this.requireFileLockEnabled(bucket)
+      if (lockError !== null) return lockError
+    }
+    const parsed =
+      retention === undefined ? undefined : parseFileRetentionValue(retention, this.now())
+    if (retention !== undefined && parsed === null) {
+      return this.error(400, 'bad_request', 'Invalid file retention')
+    }
+    if (
+      legalHold !== undefined &&
+      legalHold !== LegalHoldValue.On &&
+      legalHold !== LegalHoldValue.Off
+    ) {
+      return this.error(400, 'bad_request', 'Invalid legal hold')
+    }
+    return {
+      fileRetention:
+        parsed ?? defaultFileRetention(bucketDefaultRetention(bucket.info), uploadTimestamp),
+      legalHold: legalHold === undefined ? null : (legalHold as LegalHoldValue),
+    }
+  }
+
   private requireGovernanceBypass(
     req: { bypassGovernance?: boolean },
     authToken: string | undefined,
@@ -2876,9 +2922,12 @@ export class B2Simulator {
             metadataDirective?: string
             contentType?: string
             fileInfo?: Record<string, string>
+            fileRetention?: FileRetentionValue
+            legalHold?: LegalHoldValue
             sourceServerSideEncryption?: EncryptionSetting
             destinationServerSideEncryption?: EncryptionSetting
           },
+          headers['authorization'],
         )
       case 'b2_start_large_file':
         return await this.startLargeFile(
@@ -3217,6 +3266,32 @@ export class B2Simulator {
     if ('status' in customUploadTimestamp) {
       return customUploadTimestamp
     }
+    const retentionMode = requestHeaderValue(headers, 'x-bz-file-retention-mode')
+    const retentionUntil = requestHeaderValue(headers, 'x-bz-file-retention-retain-until-timestamp')
+    const retention =
+      retentionMode === undefined && retentionUntil === undefined
+        ? undefined
+        : {
+            mode: retentionMode,
+            retainUntilTimestamp:
+              retentionUntil !== undefined && /^\d+$/.test(retentionUntil)
+                ? Number(retentionUntil)
+                : null,
+          }
+    const uploadTimestamp = customUploadTimestamp.timestamp ?? this.monotonicTimestamp()
+    const uploadToken = await this.uploadTokenState(headers['authorization'] ?? '')
+    const uploadCapabilities =
+      uploadToken?.applicationKeyId === null
+        ? SIMULATOR_MASTER_CAPABILITIES
+        : this.keys.get(uploadToken?.applicationKeyId ?? '')?.capabilities
+    const lock = this.resolveSmallFileLock(
+      bucket,
+      retention,
+      requestHeaderValue(headers, 'x-bz-file-legal-hold'),
+      uploadTimestamp,
+      uploadCapabilities,
+    )
+    if ('status' in lock) return lock
     const fileVersion = this.makeFileVersion({
       bucketId,
       fileName,
@@ -3226,10 +3301,9 @@ export class B2Simulator {
       fileInfo,
       action: FileAction.Upload,
       serverSideEncryption,
+      ...lock,
+      uploadTimestamp,
       ...this.newReplicationStatusField(bucketId, fileName),
-      ...(customUploadTimestamp.timestamp !== null
-        ? { uploadTimestamp: customUploadTimestamp.timestamp }
-        : {}),
     })
     const stored: StoredFile = { fileVersion, data: storedData, serverSideEncryption }
     const existing = bucket.files.get(fileName)
@@ -4209,17 +4283,22 @@ export class B2Simulator {
     return { status: 200, body: { fileId: req.fileId, fileName: req.fileName } }
   }
 
-  private async copyFile(req: {
-    sourceFileId: string
-    fileName: string
-    destinationBucketId?: string
-    range?: string
-    metadataDirective?: string
-    contentType?: string
-    fileInfo?: Record<string, string>
-    sourceServerSideEncryption?: EncryptionSetting
-    destinationServerSideEncryption?: EncryptionSetting
-  }): Promise<{ status: number; body: unknown }> {
+  private async copyFile(
+    req: {
+      sourceFileId: string
+      fileName: string
+      destinationBucketId?: string
+      range?: string
+      metadataDirective?: string
+      contentType?: string
+      fileInfo?: Record<string, string>
+      fileRetention?: FileRetentionValue
+      legalHold?: LegalHoldValue
+      sourceServerSideEncryption?: EncryptionSetting
+      destinationServerSideEncryption?: EncryptionSetting
+    },
+    authToken?: string,
+  ): Promise<{ status: number; body: unknown }> {
     const nameError = validateFileName(req.fileName)
     if (nameError) return this.error(400, nameError.code, nameError.message)
     const found = this.findFile(req.sourceFileId)
@@ -4295,6 +4374,15 @@ export class B2Simulator {
       fileInfo = sourceStored.fileVersion.fileInfo
     }
 
+    const uploadTimestamp = this.monotonicTimestamp()
+    const lock = this.resolveSmallFileLock(
+      destBucket,
+      req.fileRetention,
+      req.legalHold,
+      uploadTimestamp,
+      authToken === undefined ? undefined : this.issuedTokens.get(authToken)?.capabilities,
+    )
+    if ('status' in lock) return lock
     const fileVersion = this.makeFileVersion({
       bucketId: destBucketId,
       fileName: req.fileName,
@@ -4304,6 +4392,8 @@ export class B2Simulator {
       fileInfo,
       action: FileAction.Copy,
       serverSideEncryption: destinationEncryption,
+      ...lock,
+      uploadTimestamp,
       ...this.newReplicationStatusField(destBucketId, req.fileName),
     })
     const copied: StoredFile = {
