@@ -101,7 +101,7 @@ While below `1.0.0`, breaking changes are allowed in `minor` bumps per the stand
 
 ## Changelog fragments
 
-Changie **1.24.0** is pinned as a development dependency, so `pnpm install`
+Changie **1.26.0** is pinned as a development dependency, so `pnpm install`
 provides the same generator locally and in CI. The fragment layout follows
 [Blazer](https://github.com/Backblaze/blazer/blob/main/.changie.yaml); the separate
 release preflight follows the approach documented by
