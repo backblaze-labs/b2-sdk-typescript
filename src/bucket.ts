@@ -1426,25 +1426,31 @@ export class Bucket {
     rule: ReplicationRule,
     options?: { sourceApplicationKeyId?: ApplicationKeyId },
   ): Promise<BucketInfo> {
-    const current = readableReplicationConfigurationOrEmpty(
-      (await this.refresh()).replicationConfiguration,
-      'addReplicationRule',
-    )
-    const existingSource = current.asReplicationSource
-    const sourceKey = options?.sourceApplicationKeyId ?? existingSource?.sourceApplicationKeyId
-    if (!sourceKey) {
-      throw new Error(
-        'addReplicationRule: no existing source-side replication; pass options.sourceApplicationKeyId',
+    return this.updateWithRevision((bucket) => {
+      const current = readableReplicationConfigurationOrEmpty(
+        bucket.replicationConfiguration,
+        'addReplicationRule',
       )
-    }
-    const existingRules = existingSource?.replicationRules ?? []
-    const without = existingRules.filter((r) => r.replicationRuleName !== rule.replicationRuleName)
-    return this.setReplication({
-      asReplicationSource: {
-        sourceApplicationKeyId: sourceKey,
-        replicationRules: [...without, rule],
-      },
-      asReplicationDestination: current.asReplicationDestination,
+      const existingSource = current.asReplicationSource
+      const sourceKey = options?.sourceApplicationKeyId ?? existingSource?.sourceApplicationKeyId
+      if (!sourceKey) {
+        throw new Error(
+          'addReplicationRule: no existing source-side replication; pass options.sourceApplicationKeyId',
+        )
+      }
+      const existingRules = existingSource?.replicationRules ?? []
+      const without = existingRules.filter(
+        (r) => r.replicationRuleName !== rule.replicationRuleName,
+      )
+      return {
+        replicationConfiguration: {
+          asReplicationSource: {
+            sourceApplicationKeyId: sourceKey,
+            replicationRules: [...without, rule],
+          },
+          asReplicationDestination: current.asReplicationDestination,
+        },
+      }
     })
   }
 
@@ -1459,23 +1465,24 @@ export class Bucket {
    * @throws If the caller is not authorized to read current replication settings.
    */
   async removeReplicationRule(replicationRuleName: string): Promise<BucketInfo> {
-    const current = readableReplicationConfigurationOrEmpty(
-      (await this.refresh()).replicationConfiguration,
-      'removeReplicationRule',
-    )
-    const existingSource = current.asReplicationSource
-    if (!existingSource) {
-      return this.setReplication(current)
-    }
-    const filtered = existingSource.replicationRules.filter(
-      (r) => r.replicationRuleName !== replicationRuleName,
-    )
-    return this.setReplication({
-      asReplicationSource: {
-        sourceApplicationKeyId: existingSource.sourceApplicationKeyId,
-        replicationRules: filtered,
-      },
-      asReplicationDestination: current.asReplicationDestination,
+    return this.updateWithRevision((bucket) => {
+      const current = readableReplicationConfigurationOrEmpty(
+        bucket.replicationConfiguration,
+        'removeReplicationRule',
+      )
+      const existingSource = current.asReplicationSource
+      if (!existingSource) return { replicationConfiguration: current }
+      return {
+        replicationConfiguration: {
+          asReplicationSource: {
+            sourceApplicationKeyId: existingSource.sourceApplicationKeyId,
+            replicationRules: existingSource.replicationRules.filter(
+              (r) => r.replicationRuleName !== replicationRuleName,
+            ),
+          },
+          asReplicationDestination: current.asReplicationDestination,
+        },
+      }
     })
   }
 
@@ -1537,12 +1544,20 @@ export class Bucket {
   private async updateLifecycleRules(
     change: (current: readonly LifecycleRule[]) => LifecycleRule[],
   ): Promise<BucketInfo> {
+    return this.updateWithRevision((current) => ({
+      lifecycleRules: change(current.lifecycleRules),
+    }))
+  }
+
+  private async updateWithRevision(
+    change: (current: BucketInfo) => Parameters<Bucket['update']>[0],
+  ): Promise<BucketInfo> {
     for (let retries = 0; ; retries++) {
       const current = await this.refresh()
       try {
         return await this.update({
           ifRevisionIs: current.revision,
-          lifecycleRules: change(current.lifecycleRules),
+          ...change(current),
         })
       } catch (error) {
         if (!(error instanceof B2Error) || error.status !== 409 || retries >= 3) throw error
