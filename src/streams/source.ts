@@ -29,7 +29,8 @@ function asyncIterableToReadableStream(
         if (!(value instanceof Uint8Array)) {
           throw new TypeError('Async iterable content sources must yield Uint8Array chunks.')
         }
-        controller.enqueue(value)
+        // The iterator may reuse its buffer on the next pull.
+        controller.enqueue(new Uint8Array(value))
       } catch (err) {
         /* v8 ignore next -- Iterator-return failure must not mask the pull error. */
         await returnAsyncIteratorBestEffort(iterator)
@@ -296,7 +297,8 @@ export async function collectStreamExactly(
       if (total + value.byteLength > expectedSize) {
         throw new Error(STREAM_SOURCE_TOO_MANY_BYTES_ERROR)
       }
-      chunks.push(value)
+      // Keep an owned snapshot before the next read can reuse the source buffer.
+      chunks.push(new Uint8Array(value))
       total += value.byteLength
     }
 

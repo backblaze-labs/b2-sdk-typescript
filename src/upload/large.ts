@@ -600,8 +600,8 @@ async function uploadPartsSequentially(
   const reader = options.source.stream().getReader()
   let bytesRead = 0
   // Carry-over bytes from a previous read when the read returned more
-  // than we needed to fill one part. Kept as an array to avoid an
-  // allocation per loop iteration on a typical multi-part upload.
+  // than we needed to fill one part. Own the bytes before the producer
+  // can reuse its buffer on the next read.
   let carry: Uint8Array | null = null
 
   try {
@@ -630,7 +630,7 @@ async function uploadPartsSequentially(
         buf.set(value.subarray(0, take), filled)
         filled += take
         if (take < value.byteLength) {
-          carry = value.subarray(take)
+          carry = new Uint8Array(value.subarray(take))
         }
       }
 
