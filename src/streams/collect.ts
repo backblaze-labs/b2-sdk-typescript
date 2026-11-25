@@ -26,7 +26,7 @@ export async function collectStream(
     while (true) {
       const { done, value } = await readStreamChunkWithSignal(reader, options.signal)
       if (done) break
-      chunks.push(value)
+      chunks.push(new Uint8Array(value))
       total += value.byteLength
     }
     const result = new Uint8Array(total)
