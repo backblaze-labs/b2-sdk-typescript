@@ -404,7 +404,8 @@ export function createWriteStream(
       } catch (err) {
         throw await failUpload(err)
       }
-      pending.push(chunk)
+      // A completed write lets the caller reuse its buffer while bytes remain queued.
+      pending.push(new Uint8Array(chunk))
       pendingBytes += chunk.byteLength
       while (pendingBytes >= partSize) {
         await acquirePartSlot()
