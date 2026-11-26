@@ -95,3 +95,14 @@ test('llms.txt client, bucket and simulator methods exist', () => {
     visit(file)
   }
 })
+
+test('llms.txt and AGENTS.md include the optional b2-mcp link', () => {
+  const line =
+    '- **[b2-mcp](https://github.com/backblaze-labs/b2-mcp)** — a Model Context Protocol server for B2.'
+  for (const file of ['llms.txt', 'AGENTS.md']) {
+    assert.ok(
+      readFileSync(join(root, file), 'utf8').split('\n').includes(line),
+      `${file} must include the b2-mcp link`,
+    )
+  }
+})
