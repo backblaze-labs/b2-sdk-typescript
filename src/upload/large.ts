@@ -65,7 +65,7 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
    * Non-sliceable streams and async iterables fall back to a sequential read
    * path — one part at a time, concurrency forced to 1 — so callers can stream
    * a multi-GB file without buffering the whole payload in memory. The
-   * `resumeFileId` requires a sliceable source; deprecated `resume: true`
+   * `resumeFileId` requires a sliceable source; `resume: true`
    * without an explicit file ID is ignored on forward-only sources.
    */
   readonly source: ContentSource
@@ -95,7 +95,7 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
    * Requires B2 account enablement for Custom Upload Timestamp.
    */
   readonly customUploadTimestamp?: number
-  /** Size of each part in bytes. Defaults to the account's recommended part size. */
+  /** Size of each part in bytes. Defaults to the account's recommended part size and is raised to its minimum if needed. */
   readonly partSize?: number
   /** Maximum number of parts uploaded in parallel. Defaults to 4. */
   readonly concurrency?: number
