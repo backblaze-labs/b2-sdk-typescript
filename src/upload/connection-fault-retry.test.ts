@@ -289,6 +289,30 @@ describe('single-file connection-fault retry policy', () => {
   )
 })
 
+describe('write-stream single-file connection fault policy', () => {
+  it.each([
+    { name: 'client false', clientValue: false, callValue: undefined, retries: false },
+    { name: 'per-call true overrides false', clientValue: false, callValue: true, retries: true },
+    { name: 'per-call false overrides true', clientValue: true, callValue: false, retries: false },
+  ])('$name', async ({ clientValue, callValue, retries }) => {
+    const { bucket, stats, fault } = await harness(clientValue)
+    const handle = bucket.file('stream.bin').createWriteStream({
+      ...(callValue !== undefined ? { retryUploadConnectionFaults: callValue } : {}),
+    })
+    const writer = handle.writable.getWriter()
+    await writer.write(new Uint8Array([1, 2, 3]))
+    if (retries) {
+      await writer.close()
+      await handle.done
+      expect(stats.files).toBe(2)
+    } else {
+      await expect(writer.close()).rejects.toBe(fault)
+      await expect(handle.done).rejects.toBe(fault)
+      expect(stats.files).toBe(1)
+    }
+  })
+})
+
 describe('multipart retry policy remains unchanged', () => {
   it('ignores the flag in the shared part retry helper', async () => {
     const entry = { uploadUrl: 'https://upload.example/part', authorizationToken: 'token' }
