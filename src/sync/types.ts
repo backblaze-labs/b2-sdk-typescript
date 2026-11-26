@@ -316,10 +316,10 @@ export interface SyncOptions extends SyncFilterOptions {
   readonly compareThreshold?: number
   /** Signal to abort the sync operation, including scans and in-progress SHA-1 reads. */
   readonly signal?: AbortSignal
-  /** Optional idle/no-progress timeout in milliseconds for SHA-1 reads in `sha1` mode. */
+  /** Idle/no-progress timeout for SHA-1 reads in `sha1` mode, in milliseconds. Defaults to 30,000 ms. */
   readonly sha1ReadTimeoutMillis?: number
   /**
-   * Optional absolute deadline in milliseconds for untrusted B2 SHA-1 verification reads.
+   * Absolute deadline for untrusted B2 SHA-1 verification reads, in milliseconds. Defaults to 300,000 ms.
    * Objects that cannot be fully verified before this deadline are skipped for that run.
    */
   readonly sha1VerificationTimeoutMillis?: number
