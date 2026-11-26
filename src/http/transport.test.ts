@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   B2Error,
   B2RedirectError,
@@ -113,10 +113,17 @@ function stalledResponse(prefix = '{"ok":'): Response {
 
 describe('FetchTransport', () => {
   let fetchSpy: ReturnType<typeof vi.fn<typeof fetch>>
+  // Restore the real fetch afterwards: Bun runs every file in one process, so a
+  // stub left behind breaks later files that use real HTTP (the standalone simulator).
+  const originalFetch = globalThis.fetch
 
   beforeEach(() => {
     fetchSpy = vi.fn<typeof fetch>()
     globalThis.fetch = fetchSpy
+  })
+
+  afterAll(() => {
+    globalThis.fetch = originalFetch
   })
 
   it('sets User-Agent header on requests', async () => {
