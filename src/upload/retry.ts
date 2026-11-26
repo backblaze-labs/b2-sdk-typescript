@@ -48,7 +48,7 @@ export interface UploadRetryOptions {
    * A replay can create duplicate versions retained by Object Lock. Set false
    * to surface these faults while retaining server/auth/URL retries and backoff.
    * Upload-URL acquisition failures retain their existing retry policy.
-   * Multipart parts and write streams ignore this setting and retain their retry policy.
+   * Multipart parts retain their retry policy; single-file write streams honor this setting.
    * Independent of `retryResponseBodyFailures`: success-body read failures,
    * including body-read timeouts, follow that option and can still replay when true.
    */

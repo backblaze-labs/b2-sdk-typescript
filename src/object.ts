@@ -345,6 +345,8 @@ export class B2Object {
       bucketId: this.bucket.id,
       fileName: this.fileName,
       retry: uploadRetryOptions,
+      retryUploadConnectionFaults:
+        options?.retryUploadConnectionFaults ?? this.#retryUploadConnectionFaults,
     })
   }
 
