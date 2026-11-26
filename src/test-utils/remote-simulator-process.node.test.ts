@@ -57,6 +57,20 @@ describe('resolveServeScript (where the pinned simulator comes from)', () => {
     expect(out).toBe(`${SIMULATOR_PIN.commit}\n`)
   })
 
+  it('release.yml checks out the pinned commit before the release commit', () => {
+    // The release build cannot read pin.mjs before it checks out the release
+    // commit (the deploy key is used only before that checkout), so the commit is
+    // repeated there; this keeps the copy in step with the pin.
+    const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8')
+    const build = workflow.slice(workflow.indexOf('\n  build:\n'))
+    const simulator = build.indexOf('repository: backblaze-labs/b2-simulator')
+    const release = build.indexOf(`ref: \${{ github.sha }}`)
+    expect(simulator).toBeGreaterThan(-1)
+    expect(build.slice(simulator, simulator + 200)).toContain(`ref: ${SIMULATOR_PIN.commit}`)
+    expect(release).toBeGreaterThan(simulator)
+    expect(build.lastIndexOf('secrets.SIMULATOR_DEPLOY_KEY')).toBeLessThan(release)
+  })
+
   it('uses B2SIM_DIR when set, without fetching', () => {
     const dir = join(scratch, 'checkout')
     mkdirSync(join(dir, 'bin', 'simulator'), { recursive: true })

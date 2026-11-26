@@ -114,11 +114,21 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Tests migrated off the embedded simulator run against the standalone
+      # b2-simulator at the commit pinned in scripts/b2-simulator/pin.mjs; the
+      # test step gets its path as B2SIM_DIR.
+      - name: Check out the pinned b2-simulator
+        id: simulator
+        uses: ./.github/actions/b2-simulator
+        with:
+          ssh-key: ${{ secrets.SIMULATOR_DEPLOY_KEY }}
       # Fast tier: every `*.test.ts` except `*.slow.test.ts`. Wall clock is
       # <2 s locally and <30 s on the slowest CI runner — this is the job
       # that gates PR feedback. Heavy multipart tests live in `*.slow.test.ts`
       # and run in the `test-slow` job below.
       - run: pnpm test
+        env:
+          B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
 
   test-slow:
     name: Test slow (multipart)
@@ -140,11 +150,20 @@ jobs:
           node-version: 22.22.2
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Tests migrated off the embedded simulator run against the standalone
+      # b2-simulator at the commit pinned in scripts/b2-simulator/pin.mjs; the
+      # test step gets its path as B2SIM_DIR.
+      - name: Check out the pinned b2-simulator
+        id: simulator
+        uses: ./.github/actions/b2-simulator
+        with:
+          ssh-key: ${{ secrets.SIMULATOR_DEPLOY_KEY }}
       # vitest.slow.config.ts pins maxForks: 1 (no CPU contention between
       # heavy SHA-1 tests) and testTimeout: 180_000. Bump per-worker heap
       # so the multi-MB buffers fit with room to spare.
       - run: pnpm test:slow
         env:
+          B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
           NODE_OPTIONS: --max-old-space-size=4096
 
   test-bun:
@@ -165,10 +184,20 @@ jobs:
         with:
           bun-version: latest
       - run: pnpm install --frozen-lockfile
+      # Tests migrated off the embedded simulator run against the standalone
+      # b2-simulator at the commit pinned in scripts/b2-simulator/pin.mjs; the
+      # test step gets its path as B2SIM_DIR.
+      - name: Check out the pinned b2-simulator
+        id: simulator
+        uses: ./.github/actions/b2-simulator
+        with:
+          ssh-key: ${{ secrets.SIMULATOR_DEPLOY_KEY }}
       # Bun runs every `*.test.ts` (including `*.slow.test.ts`). The slow
       # multipart tests need a generous timeout — Bun's default 5 s isn't
       # enough for the simulator's per-part SHA-1 of 5 MB+ buffers.
       - run: bun test --timeout 180000 src/
+        env:
+          B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
 
   coverage:
     name: Coverage
@@ -185,6 +214,14 @@ jobs:
           node-version: 22.22.2
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Tests migrated off the embedded simulator run against the standalone
+      # b2-simulator at the commit pinned in scripts/b2-simulator/pin.mjs; the
+      # test step gets its path as B2SIM_DIR.
+      - name: Check out the pinned b2-simulator
+        id: simulator
+        uses: ./.github/actions/b2-simulator
+        with:
+          ssh-key: ${{ secrets.SIMULATOR_DEPLOY_KEY }}
       - name: Run tests with coverage
         # `pnpm test:coverage` uses vitest.coverage.config.ts, which runs the
         # union of fast + slow tiers (the only config that covers the full
@@ -192,6 +229,7 @@ jobs:
         # Coverage thresholds gate the job.
         run: pnpm test:coverage
         env:
+          B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
           NODE_OPTIONS: --max-old-space-size=4096
       - name: Publish coverage summary to the job log
         if: always()
@@ -238,6 +276,14 @@ jobs:
           node-version: 22.22.2
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Tests migrated off the embedded simulator run against the standalone
+      # b2-simulator at the commit pinned in scripts/b2-simulator/pin.mjs; the
+      # test step gets its path as B2SIM_DIR.
+      - name: Check out the pinned b2-simulator
+        id: simulator
+        uses: ./.github/actions/b2-simulator
+        with:
+          ssh-key: ${{ secrets.SIMULATOR_DEPLOY_KEY }}
       - name: Cache Playwright browsers
         id: playwright-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -250,6 +296,7 @@ jobs:
         run: pnpm exec playwright install --with-deps "$PLAYWRIGHT_BROWSER"
       - run: pnpm test:browser
         env:
+          B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
           # Limit the matrix shard to just this engine.
           VITEST_BROWSER_INSTANCE: ${{ matrix.browser }}
 

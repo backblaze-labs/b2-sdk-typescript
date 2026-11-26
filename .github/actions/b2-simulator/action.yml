@@ -1,0 +1,66 @@
+name: Check out the pinned b2-simulator
+description: >-
+  Checks out backblaze-labs/b2-simulator at SIMULATOR_PIN
+  (scripts/b2-simulator/pin.mjs) with a read-only deploy key, verifies the
+  revision, and moves it out of the workspace. Pass the `dir` output to the
+  test steps as B2SIM_DIR. Run it after the SDK checkout.
+
+inputs:
+  ssh-key:
+    description: Read-only deploy key for backblaze-labs/b2-simulator.
+    required: true
+
+outputs:
+  dir:
+    description: Absolute path of the b2-simulator checkout.
+    value: ${{ steps.place.outputs.dir }}
+
+runs:
+  using: composite
+  steps:
+    # The repository is private and pull requests from forks get no secrets, so
+    # they cannot run the tests. Fail with a reason instead of a git error.
+    - name: Require a branch in this repository
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      run: |
+        if [ "$EVENT_NAME" = "pull_request" ] && [ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+          echo "::error::The tests need the private b2-simulator, which pull requests from forks cannot fetch. Push this change to a branch in $GITHUB_REPOSITORY."
+          exit 1
+        fi
+    - name: Require the deploy key
+      shell: bash
+      env:
+        SSH_KEY: ${{ inputs.ssh-key }}
+      run: |
+        if [ -z "$SSH_KEY" ]; then
+          echo "::error::The SIMULATOR_DEPLOY_KEY secret is empty; the tests need it to check out backblaze-labs/b2-simulator."
+          exit 1
+        fi
+    - name: Read the pinned commit
+      id: pin
+      shell: bash
+      run: |
+        commit="$(node scripts/b2-simulator/pin.mjs)"
+        [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+        echo "commit=$commit" >> "$GITHUB_OUTPUT"
+    - name: Check out backblaze-labs/b2-simulator
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: backblaze-labs/b2-simulator
+        ref: ${{ steps.pin.outputs.commit }}
+        ssh-key: ${{ inputs.ssh-key }}
+        persist-credentials: false
+        path: .b2-simulator
+    - name: Verify the revision and move it out of the workspace
+      id: place
+      shell: bash
+      env:
+        PINNED: ${{ steps.pin.outputs.commit }}
+      run: |
+        test "$(git -C .b2-simulator rev-parse HEAD)" = "$PINNED"
+        test -z "$(git -C .b2-simulator status --short)"
+        mv .b2-simulator "$RUNNER_TEMP/b2-simulator"
+        echo "dir=$RUNNER_TEMP/b2-simulator" >> "$GITHUB_OUTPUT"
