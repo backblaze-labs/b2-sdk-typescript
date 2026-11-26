@@ -32,8 +32,22 @@ test('workflow compiles then selects explicit options with the tested pinned QK 
   assert.ok(compile > 0 && select > compile && execute > select)
   assert.ok(workflow.includes('node --test scripts/select-qk-checks.test.mjs'))
   assert.ok(!workflow.includes('--execute --all'))
+  // The listing and the execute call must see the same Strategy/Harvest context,
+  // otherwise the selector compares options that differ from the executed ones.
+  const strategyHarvest =
+    '--strategy artifacts/testing-strategy.json --harvest artifacts/harvest.json'
+  const listing = workflow.lastIndexOf(strategyHarvest, compile)
+  const executing = workflow.lastIndexOf(strategyHarvest, execute)
+  assert.ok(
+    listing > 0 && compile - listing - strategyHarvest.length < 20,
+    'listing uses Strategy/Harvest',
+  )
+  assert.ok(
+    executing > select && execute - executing - strategyHarvest.length < 20,
+    'execute uses Strategy/Harvest',
+  )
   assert.equal(
-    (workflow.match(/quality-keeper\.git@da3df2255df129a292616e65417d333946f4cd6f/g) ?? []).length,
+    (workflow.match(/quality-keeper\.git@35be8583b1f2b54155d0428f537aee5c22d7963a/g) ?? []).length,
     2,
   )
   for (const artifact of [
