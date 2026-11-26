@@ -221,6 +221,54 @@ describe('B2Client with simulator', () => {
     expect(lateClient.accountInfo.getAuthToken()).not.toBe(originalToken)
   })
 
+  it('retries a late stale-token 401 with the current token instead of reauthorizing again', async () => {
+    const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
+    const inner = sim.transport()
+    let authorizeCount = 0
+    const staleRequestSent = deferred<void>()
+    const releaseStale401 = deferred<void>()
+    const listAuthorizations: string[] = []
+    const lateClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: {
+        async send(request) {
+          const endpoint = apiEndpointName(request)
+          if (endpoint === 'b2_authorize_account') authorizeCount += 1
+          if (endpoint !== 'b2_list_buckets') return inner.send(request)
+          listAuthorizations.push(request.headers?.['Authorization'] ?? '')
+          const response = await inner.send(request)
+          if (listAuthorizations.length === 1) {
+            // Hold the first request's 401 until another request has
+            // finished the shared reauthorization.
+            staleRequestSent.resolve(undefined)
+            await releaseStale401.promise
+          }
+          return response
+        },
+      },
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await lateClient.authorize()
+    const originalToken = lateClient.accountInfo.getAuthToken()
+    sim.advanceTime(2000)
+
+    const stale = lateClient.listBuckets()
+    await staleRequestSent.promise
+    await expect(lateClient.listBuckets()).resolves.toEqual([])
+    const freshToken = lateClient.accountInfo.getAuthToken()
+    expect(freshToken).not.toBe(originalToken)
+    expect(authorizeCount).toBe(2)
+
+    releaseStale401.resolve(undefined)
+    await expect(stale).resolves.toEqual([])
+
+    expect(authorizeCount).toBe(2)
+    expect(lateClient.accountInfo.getAuthToken()).toBe(freshToken)
+    expect(listAuthorizations).toEqual([originalToken, originalToken, freshToken, freshToken])
+  })
+
   it('reauthorizes and returns the fresh auth token', async () => {
     const token = await (
       client as unknown as {

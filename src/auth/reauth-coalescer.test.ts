@@ -94,6 +94,59 @@ describe('ReauthCoalescer', () => {
     expect(refreshCalls).toBe(2)
   })
 
+  it('returns the current refreshed value for a caller that failed with an older value', async () => {
+    let current = 'old-token'
+    let refreshCalls = 0
+    const coalescer = new ReauthCoalescer<string>(
+      async () => {
+        refreshCalls += 1
+        current = `fresh-token-${refreshCalls}`
+        return current
+      },
+      () => current,
+    )
+
+    await expect(coalescer.run(undefined, 'old-token')).resolves.toBe('fresh-token-1')
+    await expect(coalescer.run(undefined, 'old-token')).resolves.toBe('fresh-token-1')
+    expect(refreshCalls).toBe(1)
+  })
+
+  it('refreshes again when the caller failed with the current refreshed value', async () => {
+    let current = 'old-token'
+    let refreshCalls = 0
+    const coalescer = new ReauthCoalescer<string>(
+      async () => {
+        refreshCalls += 1
+        current = `fresh-token-${refreshCalls}`
+        return current
+      },
+      () => current,
+    )
+
+    await expect(coalescer.run(undefined, 'old-token')).resolves.toBe('fresh-token-1')
+    await expect(coalescer.run(undefined, 'fresh-token-1')).resolves.toBe('fresh-token-2')
+    await expect(coalescer.run()).resolves.toBe('fresh-token-3')
+    expect(refreshCalls).toBe(3)
+  })
+
+  it('refreshes again when the refreshed value is no longer current', async () => {
+    let current = 'old-token'
+    let refreshCalls = 0
+    const coalescer = new ReauthCoalescer<string>(
+      async () => {
+        refreshCalls += 1
+        current = `fresh-token-${refreshCalls}`
+        return current
+      },
+      () => current,
+    )
+
+    await expect(coalescer.run(undefined, 'old-token')).resolves.toBe('fresh-token-1')
+    current = 'replaced-elsewhere'
+    await expect(coalescer.run(undefined, 'old-token')).resolves.toBe('fresh-token-2')
+    expect(refreshCalls).toBe(2)
+  })
+
   it('does not abort a refresh that settles normally for the final waiter', async () => {
     let refreshSignal: AbortSignal | undefined
     const coalescer = new ReauthCoalescer<string>(async (signal) => {

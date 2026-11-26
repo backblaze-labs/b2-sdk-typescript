@@ -85,7 +85,10 @@ export class PartnerAuthCore {
     this.additionalAllowedSuffixes = options.additionalAllowedHostSuffixes
     this.disableSsrfGuard = options.disableSsrfGuard ?? false
     this.allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
-    this.reauthCoalescer = new ReauthCoalescer((signal) => this.doReauthorize(signal))
+    this.reauthCoalescer = new ReauthCoalescer(
+      (signal) => this.doReauthorize(signal),
+      () => this.partnerAccountInfo.getAuth()?.authorizationToken,
+    )
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -106,7 +109,7 @@ export class PartnerAuthCore {
     this.transport = new RetryTransport({
       transport: baseTransport,
       retry: { ...DEFAULT_RETRY_OPTIONS, ...options.retry },
-      onReauth: (signal) => this.reauthorize(signal),
+      onReauth: (signal, staleToken) => this.reauthorize(signal, staleToken),
     })
 
     this.cachedEndpointSuffixes = this.validateCachedAuth()
@@ -215,8 +218,8 @@ export class PartnerAuthCore {
     }
   }
 
-  private reauthorize(signal: AbortSignal | undefined): Promise<string> {
-    return this.reauthCoalescer.run(signal)
+  private reauthorize(signal: AbortSignal | undefined, staleToken?: string): Promise<string> {
+    return this.reauthCoalescer.run(signal, staleToken)
   }
 
   private async doReauthorize(signal: AbortSignal): Promise<string> {

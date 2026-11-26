@@ -1286,7 +1286,7 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
-    it('passes the original abort signal to expired-token reauth', async () => {
+    it('passes the original abort signal and stale token to expired-token reauth', async () => {
       const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, errorBody)
       const okResponse = mockResponse(200, { ok: true })
@@ -1303,7 +1303,7 @@ describe('RetryTransport', () => {
 
       await transport.send({ ...baseRequest, signal: controller.signal })
 
-      expect(onReauth).toHaveBeenCalledWith(controller.signal)
+      expect(onReauth).toHaveBeenCalledWith(controller.signal, 'token-123')
     })
 
     it('does not reauth or retry authorize endpoint expired-token responses', async () => {

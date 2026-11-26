@@ -553,6 +553,64 @@ describe('PartnerClient facade', () => {
     ])
   })
 
+  it('retries a late stale-token 401 with the current token instead of reauthorizing again', async () => {
+    let authorizeCount = 0
+    let releaseStale401: (() => void) | undefined
+    const stale401Gate = new Promise<void>((resolve) => {
+      releaseStale401 = resolve
+    })
+    const listAuthorizations: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        const endpoint = apiEndpointName(request)
+        if (endpoint === 'b2_authorize_account') {
+          authorizeCount += 1
+          return jsonResponse(partnerAuthorizeResponse(`partner-token-${authorizeCount}`))
+        }
+        if (endpoint === 'b2_list_groups') {
+          const authorization = request.headers?.['Authorization'] ?? ''
+          listAuthorizations.push(authorization)
+          if (authorization === 'partner-token-1') {
+            // Hold the first request's 401 until another request has
+            // finished the shared reauthorization.
+            if (listAuthorizations.length === 1) await stale401Gate
+            return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+          }
+          return jsonResponse({
+            accountId: accountId('partner-account'),
+            groups: [],
+            nextGroupId: null,
+          })
+        }
+        throw new Error(`unexpected endpoint: ${endpoint}`)
+      },
+    }
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await client.authorize()
+    const stale = client.listGroups()
+    await waitUntil(() => listAuthorizations.length === 1)
+    await expect(client.listGroups()).resolves.toMatchObject({ groups: [] })
+    expect(authorizeCount).toBe(2)
+
+    releaseStale401?.()
+    await expect(stale).resolves.toMatchObject({ groups: [] })
+
+    expect(authorizeCount).toBe(2)
+    expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-2')
+    expect(listAuthorizations).toEqual([
+      'partner-token-1',
+      'partner-token-1',
+      'partner-token-2',
+      'partner-token-2',
+    ])
+  })
+
   it('keeps cached auth when expired-token reauthorization fails', async () => {
     let authorizeCount = 0
     const transport: HttpTransport = {

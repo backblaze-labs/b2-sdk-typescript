@@ -182,7 +182,10 @@ export class B2Client {
     this.#retryUploadConnectionFaults = resolveRetryUploadConnectionFaults(
       options.retryUploadConnectionFaults,
     )
-    this.reauthCoalescer = new ReauthCoalescer((signal) => this.doReauthorize(signal))
+    this.reauthCoalescer = new ReauthCoalescer(
+      (signal) => this.doReauthorize(signal),
+      () => this.#accountInfo.getAuth()?.authorizationToken,
+    )
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -203,7 +206,7 @@ export class B2Client {
     const retryTransport = new RetryTransport({
       transport: baseTransport,
       retry: this.resolvedUploadRetryOptions,
-      onReauth: (signal) => this.reauthorize(signal),
+      onReauth: (signal, staleToken) => this.reauthorize(signal, staleToken),
     })
 
     const cachedAuth = this.#accountInfo.getAuth()
@@ -278,11 +281,14 @@ export class B2Client {
    * Authorization header before retrying.
    *
    * @param signal - Optional abort signal for the request that triggered reauthorization.
+   * @param staleToken - Optional token the failed request was sent with. If an
+   *   earlier reauthorization already replaced it, the current token is returned
+   *   without calling `b2_authorize_account` again.
    *
    * @returns The fresh authorization token.
    */
-  private reauthorize(signal: AbortSignal | undefined): Promise<string> {
-    return this.reauthCoalescer.run(signal)
+  private reauthorize(signal: AbortSignal | undefined, staleToken?: string): Promise<string> {
+    return this.reauthCoalescer.run(signal, staleToken)
   }
 
   private async doReauthorize(signal: AbortSignal): Promise<string> {
