@@ -4670,7 +4670,7 @@ export class B2Simulator {
     let startIndex = 0
     if (req.startFileId !== undefined) {
       const found = candidates.findIndex((f) => f.fileId === req.startFileId)
-      startIndex = found >= 0 ? found : 0
+      startIndex = Math.max(found, 0)
     }
 
     const slice = candidates.slice(startIndex, startIndex + max)

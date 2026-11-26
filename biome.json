@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.9/schema.json",
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
     "enabled": true,
@@ -34,6 +34,8 @@
       "trailingCommas": "all"
     }
   },
+  "markdown": { "formatter": { "enabled": false } },
+  "yaml": { "formatter": { "enabled": false } },
   "files": {
     "includes": ["**", "!**/dist", "!**/api-docs", "!**/node_modules", "!**/*.cjs", "!**/coverage"]
   }

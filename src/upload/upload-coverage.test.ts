@@ -832,7 +832,7 @@ describe('uploadLargeFile cleanup paths', () => {
     }
   })
 
-  it('aborts and drains parallel part work before cancelling the large file', async () => {
+  it('drains parallel part work before cancelling the large file when a part fails', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000 })
     const inner = sim.transport()
     let part2Started!: () => void
@@ -1442,7 +1442,7 @@ describe('uploadLargeFile cleanup paths', () => {
     expect(cleanupFailures).toHaveLength(1)
   })
 
-  it('aborts and drains parallel part work before cancelling the large file', async () => {
+  it('aborts and drains parallel part work before cancelling the large file when the caller aborts', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
     let releasePartOneUpload: (() => void) | undefined
