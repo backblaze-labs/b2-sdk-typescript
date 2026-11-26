@@ -26,8 +26,7 @@ export const DEFAULT_DOWNLOAD_RANGE_SIZE = 10 * 1024 * 1024
 
 /**
  * Default parallel-task count for **bulk metadata** operations:
- * `Bucket.deleteMany` (per-version delete calls), and the action loop in
- * `synchronize` when it dispatches mixed actions in batches.
+ * `Bucket.deleteMany` (per-version delete calls).
  *
  * Higher than the transfer default because each task is a tiny API
  * round-trip (no payload), so concurrency is bound by API latency rather
