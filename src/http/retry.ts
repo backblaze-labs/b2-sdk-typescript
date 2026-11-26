@@ -1,16 +1,17 @@
 /** Configuration for retry behavior on transient failures. */
 export interface RetryOptions {
   /**
-   * Maximum retry attempts for each retry mechanism. Defaults to 5.
+   * Maximum retry attempts for each retry mechanism. When partial retry options
+   * are merged with `DEFAULT_RETRY_OPTIONS`, the default is 5.
    * `B2Object.createReadStream` uses separate limits for transport retries and
    * retryable range-body failures; each repeated range request can use its own
    * transport retry budget. Set to 0 to disable those transient retries. Expired
    * token reauthorization is handled separately.
    */
   readonly maxRetries: number
-  /** Upper bound on retry delay in milliseconds, regardless of backoff calculation. */
+  /** Upper bound on retry delay in milliseconds; partial options use `DEFAULT_RETRY_OPTIONS`. */
   readonly maxRetryDelayMs: number
-  /** Base delay in milliseconds for the first retry. Doubles on each subsequent attempt. */
+  /** Base delay in milliseconds for the first retry. Partial options use `DEFAULT_RETRY_OPTIONS`; the delay doubles on each subsequent attempt. */
   readonly initialRetryDelayMs: number
   /**
    * Optional timeout for each HTTP request attempt. Defaults to 15 minutes
