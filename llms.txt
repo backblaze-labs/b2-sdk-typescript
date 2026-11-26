@@ -170,3 +170,7 @@ try {
 ## Full API reference
 
 https://backblaze-labs.github.io/b2-sdk-typescript/
+
+## Optional
+
+- **[b2-mcp](https://github.com/backblaze-labs/b2-mcp)** — a Model Context Protocol server for B2.

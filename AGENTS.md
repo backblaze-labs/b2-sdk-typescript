@@ -67,6 +67,10 @@ Run `pnpm verify` before claiming a change is done. CI runs the same gate on
 Linux + Windows + macOS (Node 22.22.2 and 24) plus `bun test src/` and the
 per-engine browser matrix.
 
+## External tools
+
+- **[b2-mcp](https://github.com/backblaze-labs/b2-mcp)** — a Model Context Protocol server for B2.
+
 ## Conventions that bite (full list in [ARCHITECTURE.md](ARCHITECTURE.md))
 
 - **`exactOptionalPropertyTypes` is ON** — never pass `{ x: undefined }` for `x?: T`; use `...(v !== undefined ? { x: v } : {})`.
