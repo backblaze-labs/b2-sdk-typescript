@@ -33,9 +33,9 @@ export interface HighLevelUploadOptions extends UploadRetryOptions, CleanupFailu
    * Requires B2 account enablement for Custom Upload Timestamp.
    */
   readonly customUploadTimestamp?: number
-  /** Part size override for multipart uploads, in bytes. */
+  /** Part size override for multipart uploads, in bytes, raised to the account minimum if needed. */
   readonly partSize?: number
-  /** Number of concurrent part uploads for large files. */
+  /** Number of concurrent part uploads for large files. Defaults to 4. */
   readonly concurrency?: number
   /** Callback invoked with upload progress events. */
   readonly onProgress?: ProgressListener
@@ -51,11 +51,11 @@ export interface HighLevelUploadOptions extends UploadRetryOptions, CleanupFailu
   readonly resume?: boolean
   /** Optional aggregate SDK-enforced timeout for resume discovery. */
   readonly resumeDiscoveryTimeoutMs?: number
-  /** Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. */
+  /** Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10. */
   readonly resumeMaxListPages?: number
-  /** Maximum metadata-compatible candidates whose parts may be listed before upload starts. */
+  /** Maximum metadata-compatible candidates whose parts may be listed before upload starts. Defaults to 25. */
   readonly resumeMaxPartCandidates?: number
-  /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate. */
+  /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate. Defaults to 10. */
   readonly resumeMaxPartPages?: number
   /**
    * Explicit unfinished large-file ID to verify and resume. Only supported on
