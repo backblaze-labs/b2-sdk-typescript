@@ -12,6 +12,7 @@ This is a map, not a manual. Follow the pointers to the real source of truth.
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Subpath exports, source layout, layering, and the key design decisions. **Read before touching `src/`.** |
 | [`docs/`](docs/README.md) | **System of record.** [core beliefs](docs/design-docs/core-beliefs.md), [design-docs/ADRs](docs/design-docs/index.md), [quality score](docs/QUALITY_SCORE.md), [exec-plans + tech-debt](docs/exec-plans/tech-debt-tracker.md), [references](docs/references/). |
 | [`docs/writing-style.md`](docs/writing-style.md) | Writing guidance for documentation and TSDoc. |
+| [`.claude/skills/use-b2-sdk/`](.claude/skills/use-b2-sdk/SKILL.md) | SDK usage patterns for application code. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev workflow, PR checklist, release steps. |
 | [`REVIEW.md`](REVIEW.md) | Review contract: what failure looks like here, recurring lessons, the AI reviewer rules, the checklist. Layers, risk tiers and metrics: [`docs/review-process.md`](docs/review-process.md). |
 | [`intent/`](intent/TEMPLATE.md) | AI-native SDLC artifact chain per change (`intent.md` -> `spec.md` -> `plan.md`). |
