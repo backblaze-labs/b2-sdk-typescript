@@ -19,7 +19,8 @@
  * a network error.
  */
 function isLegalHoldRefusal(error) {
-  if (!error) return false;
+  // A thrown non-Error value is never the refusal (same rule as guard.explainMismatch).
+  if (!(error instanceof Error)) return false;
   if (error.status === 401 && error.code === 'access_denied') return true;
   return (
     (error.status === 400 || error.status === 403) &&
