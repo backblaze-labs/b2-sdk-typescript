@@ -208,12 +208,17 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  * and executes them with bounded concurrency. Yields {@link SyncEvent} entries for
  * each comparison and action result.
  *
+ * Invalid `downloadIdleTimeoutMillis` is reported as an error event when a B2-to-local download runs.
+ *
  * @param config - The synchronizer configuration (source, dest, options, and optional bucket).
  *
  * @returns An async generator that yields comparison and action events.
  *
  * @throws A `TypeError` on iteration if `keepMode` is unsupported.
  * @throws A `RangeError` on iteration if `keep-days` has no finite, non-negative `keepDays` value.
+ * @throws An `Error` on iteration if `compareMode` is unsupported.
+ * @throws An `Error` on iteration if the source and destination direction is unsupported.
+ * @throws A `RangeError` on iteration if `concurrency` is not a positive integer.
  */
 export function synchronize(config: SupportedSynchronizerConfig): AsyncGenerator<SyncEvent>
 /**
