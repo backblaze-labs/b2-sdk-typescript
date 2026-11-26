@@ -298,12 +298,24 @@ jobs:
             --json artifacts/assessment.json \
             --harvest-json artifacts/harvest.json \
             --strategy-json artifacts/testing-strategy.json
+          # Choose explicit QK options. The root test:all script already contains
+          # test's fast suite; retain its slow suite without rerunning the fast
+          # prefix. Unknown scripts/contexts keep their original options. The
+          # options are listed with the same Strategy/Harvest inputs as the
+          # execute call below, so the selector compares the same option context.
+          node --test scripts/select-qk-checks.test.mjs
+          quality-keeper act run-found-checks \
+            --assessment artifacts/assessment.json --repo . \
+            --strategy artifacts/testing-strategy.json --harvest artifacts/harvest.json \
+            --json artifacts/action-options.json
+          node scripts/select-qk-checks.mjs artifacts/action-options.json . artifacts/selected-options
+          mapfile -t selected_args < artifacts/selected-options.args
           # Failed safe checks remain advisory; operational QK errors fail the job.
           # Expensive/live-service checks stay gated (no --include-expensive).
           quality-keeper act run-found-checks \
             --assessment artifacts/assessment.json --repo . \
             --strategy artifacts/testing-strategy.json --harvest artifacts/harvest.json \
-            --execute --all --advisory --execution-dir artifacts/exec --timeout-seconds 900
+            --execute "${selected_args[@]}" --advisory --execution-dir artifacts/exec --timeout-seconds 900
           quality-keeper post-execute-report \
             --assessment artifacts/assessment.json \
             --execution artifacts/exec/execution.json \
@@ -367,6 +379,9 @@ jobs:
             artifacts/quality-run.json
             artifacts/testing-strategy.json
             artifacts/harvest.json
+            artifacts/action-options.json
+            artifacts/selected-options.json
+            artifacts/selected-options.args
             artifacts/exec/execution.json
             artifacts/post-execute-summary.json
             artifacts/post-execute-report.html

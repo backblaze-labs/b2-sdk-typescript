@@ -37,6 +37,7 @@ import {
   skipB2Integration as skip,
   sweepStaleIntegrationBuckets,
 } from '../helpers/live-b2.ts'
+import { uploadRawFile } from '../helpers/raw-upload.ts'
 
 requireB2IntegrationCredentials()
 
@@ -440,23 +441,17 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
       const name = fileName('sse-c')
       const key = await EncryptionKey.fromBytes(makeBytes(32, 97))
       const contentSha1 = await sha1Hex(data)
-      const uploadUrl = await client.raw.getUploadUrl(
-        client.accountInfo.getApiUrl(),
-        client.accountInfo.getAuthToken(),
-        { bucketId: bucket.id },
-      )
-
-      const uploaded = await client.raw.uploadFile(
-        uploadUrl.uploadUrl,
+      const uploaded = await uploadRawFile(
+        client,
+        bucket.id,
         {
-          authorization: uploadUrl.authorizationToken,
           fileName: name,
           contentType: 'application/octet-stream',
           contentLength: data.byteLength,
           contentSha1,
           serverSideEncryption: key,
         },
-        data as BodyInit,
+        data,
       )
 
       expect(uploaded.fileName).toBe(name)
