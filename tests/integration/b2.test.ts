@@ -29,6 +29,7 @@ import {
   emptyObjectLockBucket,
   expectBytesEqual,
   keyId,
+  liveRealmOptions,
   makeBucketName,
   makeBytes,
   readAllBytes,
@@ -257,6 +258,7 @@ describe.skipIf(skip)('B2 integration', () => {
     client = new B2Client({
       applicationKeyId: keyId,
       applicationKey: appKey,
+      ...liveRealmOptions,
     })
     await setupStep('authorize', () => client.authorize())
 
@@ -281,7 +283,10 @@ describe.skipIf(skip)('B2 integration', () => {
 
   it('authorizes successfully', () => {
     expect(client.accountInfo.getAccountId()).toBeTruthy()
-    expect(client.accountInfo.getApiUrl()).toContain('backblazeb2.com')
+    expect(client.accountInfo.getApiUrl()).toBeTruthy()
+    if (liveRealmOptions.realm === undefined) {
+      expect(client.accountInfo.getApiUrl()).toContain('backblazeb2.com')
+    }
   })
 
   it('created the test bucket', () => {

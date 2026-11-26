@@ -14,6 +14,7 @@ import { Capability, type Capability as CapabilityValue } from '../../src/types/
 import { type ApplicationKeyId, type BucketId, bucketId } from '../../src/types/ids.ts'
 import type { ApplicationKey, CreateKeyOptions, FullApplicationKey } from '../../src/types/key.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
+import { liveRealmOptions } from '../helpers/live-b2.ts'
 
 const keyManagementKeyId = env('B2_KEY_MANAGEMENT_APPLICATION_KEY_ID')
 const keyManagementAppKey = env('B2_KEY_MANAGEMENT_APPLICATION_KEY')
@@ -68,6 +69,7 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
     client = new B2Client({
       applicationKeyId: keyId,
       applicationKey: appKey,
+      ...liveRealmOptions,
     })
     await client.authorize()
 
@@ -121,6 +123,7 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
     const scopedClient = new B2Client({
       applicationKeyId: created.applicationKeyId,
       applicationKey: created.applicationKey,
+      ...liveRealmOptions,
     })
     await scopedClient.authorize()
     const allowed = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed

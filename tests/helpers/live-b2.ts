@@ -11,6 +11,16 @@ import { deleteFileVersionOnce, hasB2ErrorCode } from './b2-cleanup.ts'
 
 export const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 export const appKey = process.env.B2_APPLICATION_KEY ?? ''
+// B2_REALM (optional) points the live suite at another realm: a known realm name or an
+// https (or loopback-IP http) base URL, e.g. a local B2 simulator. Unset means production.
+// A non-default realm also turns off the SSRF host allow-list: such a server hands out
+// upload and download URLs on its own (often literal-IP) addresses, which the guard
+// built for backblazeb2.com hosts would refuse.
+const liveRealm = process.env.B2_REALM?.trim() ?? ''
+export const liveRealmOptions: {
+  readonly realm?: string
+  readonly allowedHostSuffixes?: readonly string[]
+} = liveRealm === '' ? {} : { realm: liveRealm, allowedHostSuffixes: [] }
 export const skipB2Integration = !keyId || !appKey
 export const masterKeyId = process.env.B2_MASTER_KEY_ID ?? ''
 export const masterKey = process.env.B2_MASTER_KEY ?? ''
