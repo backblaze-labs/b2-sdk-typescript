@@ -110,7 +110,7 @@ export interface DownloadCallOptions {
 /**
  * Options accepted by {@link B2Object.head} / {@link Bucket.head}.
  * Same shape as {@link DownloadCallOptions} minus `method` (always
- * HEAD) and `onProgress` (no body to track).
+ * HEAD), `onProgress` and `progressIntervalMillis` (no body to track).
  */
 export type HeadCallOptions = Omit<
   DownloadCallOptions,

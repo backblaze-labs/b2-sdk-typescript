@@ -68,7 +68,8 @@ interface DownloadCommonOptions {
    * Wraps the response body so the SDK increments a `ProgressTracker` per
    * chunk and emits a `partsCompleted: 1` event when the stream finishes.
    * `totalBytes` is the response's `Content-Length`
-   * header (or `null` if the server didn't send one — rare for B2).
+   * header parsed as an integer, or `0` if the header is absent. A non-numeric
+   * header produces `NaN`.
    *
    * If the caller does not read the returned body to completion, the
    * tracker's `completePart()` event will not fire. That is intentional:
@@ -99,7 +100,8 @@ export interface DownloadByNameOptions extends DownloadCommonOptions {
 
 /**
  * Shared HEAD options. Mirrors {@link DownloadCommonOptions} but omits
- * `method` (always HEAD) and `onProgress` (no body to track).
+ * `method` (always HEAD), `onProgress` and `progressIntervalMillis`
+ * (no body to track).
  */
 type HeadCommonOptions = Omit<
   DownloadCommonOptions,
