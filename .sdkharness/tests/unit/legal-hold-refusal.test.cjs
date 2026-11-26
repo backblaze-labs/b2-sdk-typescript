@@ -43,6 +43,16 @@ test('an unrelated refusal is not the legal-hold refusal', () => {
   }
 });
 
+test('a 400/403 file_lock_legal_hold_protected whose message does not name the hold is not the refusal', () => {
+  for (const status of [400, 403]) {
+    assert.equal(
+      isLegalHoldRefusal(b2Error(status, 'file_lock_legal_hold_protected', 'Retention period active')),
+      false,
+      String(status),
+    );
+  }
+});
+
 test('a thrown non-Error value is not the legal-hold refusal, even with matching fields', () => {
   // guard.explainMismatch (used by the leaf before this helper) rejects
   // non-Error values; keep that rule.
