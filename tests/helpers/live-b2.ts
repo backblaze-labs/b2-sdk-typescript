@@ -13,14 +13,31 @@ export const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 export const appKey = process.env.B2_APPLICATION_KEY ?? ''
 // B2_REALM (optional) points the live suite at another realm: a known realm name or an
 // https (or loopback-IP http) base URL, e.g. a local B2 simulator. Unset means production.
-// A non-default realm also turns off the SSRF host allow-list: such a server hands out
-// upload and download URLs on its own (often literal-IP) addresses, which the guard
-// built for backblazeb2.com hosts would refuse.
-const liveRealm = process.env.B2_REALM?.trim() ?? ''
-export const liveRealmOptions: {
+// Only a loopback realm URL (127.0.0.1, localhost, [::1]) also turns off the SSRF host
+// allow-list: a local simulator hands out upload and download URLs on its own loopback
+// addresses, which the guard built for backblazeb2.com hosts would refuse. Any other realm
+// (a name such as staging, or a remote URL) keeps the allow-list on.
+const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]'])
+
+/** Client options for a `B2_REALM` value; exported for its credential-free test. */
+export function liveRealmOptionsFor(value: string | undefined): {
   readonly realm?: string
   readonly allowedHostSuffixes?: readonly string[]
-} = liveRealm === '' ? {} : { realm: liveRealm, allowedHostSuffixes: [] }
+} {
+  const realm = value?.trim() ?? ''
+  if (realm === '') return {}
+  let hostname = ''
+  try {
+    hostname = new URL(realm).hostname
+  } catch {
+    // A realm name such as "staging", not a URL.
+  }
+  return loopbackHosts.has(hostname) ? { realm, allowedHostSuffixes: [] } : { realm }
+}
+
+export const liveRealmOptions = liveRealmOptionsFor(process.env.B2_REALM)
+/** True when B2_REALM is a loopback URL and the SDK's host allow-list is off. */
+export const liveRealmBypassesHostGuard = liveRealmOptions.allowedHostSuffixes !== undefined
 export const skipB2Integration = !keyId || !appKey
 export const masterKeyId = process.env.B2_MASTER_KEY_ID ?? ''
 export const masterKey = process.env.B2_MASTER_KEY ?? ''
