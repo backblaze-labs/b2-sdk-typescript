@@ -12,8 +12,9 @@ import { jsonErrorResponse, makeClient } from './test-utils/index.ts'
  * One test per cell so each test asserts exactly the cell it names. Inputs are the
  * signing secret and a custom header value. Console output (everything the SDK writes
  * through `console`; the SDK has no debug-tracing facility of its own) is checked on four
- * paths: success, failure before authorization, API error and a simulator-rejected
- * validation error. Exception text is checked on the three paths that throw: the success
+ * paths: success, failure before authorization, a 503 API error and a 400 API refusal
+ * (the SDK does no local validation here; the simulator rejects an empty rule name).
+ * Exception text is checked on the three paths that throw: the success
  * path throws nothing, so it has no exception cells; a leak on that path would show up in
  * the console cells. That makes 8 console cells plus 6 exception cells.
  */
@@ -80,7 +81,7 @@ function captureConsole() {
   const methods = ['log', 'debug', 'info', 'warn', 'error', 'trace'] as const
   const spies = methods.map((method) =>
     vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
-      lines.push(args.map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg))).join(' '))
+      lines.push(args.map((arg) => renderValue(arg)).join(' '))
     }),
   )
   return {
@@ -91,20 +92,51 @@ function captureConsole() {
   }
 }
 
-/** Message, stack, enumerable fields and the cause chain of whatever was thrown. */
-function exceptionText(error: unknown): string {
-  const parts: string[] = []
-  let current: unknown = error
-  for (let depth = 0; depth < 5 && current !== undefined && current !== null; depth++) {
-    if (current instanceof Error) {
-      parts.push(current.message, current.stack ?? '', JSON.stringify({ ...current }))
-      current = current.cause
-    } else {
-      parts.push(String(current))
-      current = undefined
-    }
+/**
+ * Renders any value the way a console or error report could expose it, without
+ * `node:util` so the file stays isomorphic. Strings stay as-is. An `Error` contributes
+ * its message, stack, enumerable fields and cause chain, whatever their type. Other
+ * objects are serialized with a cycle-safe replacer that also expands nested errors,
+ * falling back to `String()` for anything JSON cannot represent.
+ */
+function renderValue(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
+  if (typeof value === 'string') return value
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
+    return String(value)
   }
-  return parts.join('\n')
+  if (seen.has(value)) return '[Circular]'
+  seen.add(value)
+  if (value instanceof Error) {
+    const fields = Object.entries(value).map(
+      ([key, field]) => `${key}: ${renderValue(field, seen)}`,
+    )
+    const parts = [value.name, value.message, value.stack ?? '', ...fields]
+    if (value.cause !== undefined) parts.push(`cause: ${renderValue(value.cause, seen)}`)
+    return parts.join('\n')
+  }
+  try {
+    let root = true
+    return JSON.stringify(value, (_key, field: unknown) => {
+      if (root) {
+        // The first call is the value itself, already recorded in `seen` above.
+        root = false
+        return field
+      }
+      if (field instanceof Error) return renderValue(field, seen)
+      if (field !== null && typeof field === 'object') {
+        if (seen.has(field)) return '[Circular]'
+        seen.add(field)
+      }
+      return field
+    })
+  } catch {
+    return String(value)
+  }
+}
+
+/** Message, stack, enumerable fields and the full cause chain of whatever was thrown. */
+function exceptionText(error: unknown): string {
+  return renderValue(error)
 }
 
 async function thrownBy(promise: Promise<unknown>): Promise<unknown> {
@@ -125,77 +157,78 @@ describe('setNotificationRules keeps sensitive inputs out of diagnostics', () =>
   //   cells (which watch the whole call) would catch one.
   // - API error: the canned 503 does not echo the request, so these cells prove the SDK
   //   adds no secret to the error itself.
-  // - Validation error: the empty rule name is rejected by the simulator as a server 400,
-  //   not by the SDK's local validation.
+  // - API refusal (400): the empty rule name is rejected by the simulator as a server 400.
+  //   setNotificationRules does no local validation, so this is a second API-error path,
+  //   not a local validation path.
 
-  // ── signing secret × SDK debug trace ─────────────────────────────────────
+  // ── signing secret × console output ─────────────────────────────────────
 
-  it('signing secret stays out of SDK debug trace on the success path', async () => {
+  it('signing secret stays out of console output on the success path', async () => {
     const { bucket } = await setup()
-    const trace = captureConsole()
+    const consoleOutput = captureConsole()
     await bucket.setNotificationRules([sensitiveRule()])
-    trace.restore()
-    expect(trace.output()).not.toContain(SIGNING_SECRET)
+    consoleOutput.restore()
+    expect(consoleOutput.output()).not.toContain(SIGNING_SECRET)
   })
 
-  it('signing secret stays out of SDK debug trace on the pre-authorization path', async () => {
+  it('signing secret stays out of console output on the pre-authorization path', async () => {
     const { client, bucket } = await setup()
     client.accountInfo.clear()
-    const trace = captureConsole()
+    const consoleOutput = captureConsole()
     await expect(bucket.setNotificationRules([sensitiveRule()])).rejects.toThrow()
-    trace.restore()
-    expect(trace.output()).not.toContain(SIGNING_SECRET)
+    consoleOutput.restore()
+    expect(consoleOutput.output()).not.toContain(SIGNING_SECRET)
   })
 
-  it('signing secret stays out of SDK debug trace on the api error path', async () => {
+  it('signing secret stays out of console output on the 503 API error path', async () => {
     const { bucket } = await setupWithServerError()
-    const trace = captureConsole()
+    const consoleOutput = captureConsole()
     await expect(bucket.setNotificationRules([sensitiveRule()])).rejects.toThrow()
-    trace.restore()
-    expect(trace.output()).not.toContain(SIGNING_SECRET)
+    consoleOutput.restore()
+    expect(consoleOutput.output()).not.toContain(SIGNING_SECRET)
   })
 
-  it('signing secret stays out of SDK debug trace on the simulator-rejected validation error path', async () => {
+  it('signing secret stays out of console output on the 400 API refusal path', async () => {
     const { bucket } = await setup()
-    const trace = captureConsole()
+    const consoleOutput = captureConsole()
     await expect(bucket.setNotificationRules([{ ...sensitiveRule(), name: '' }])).rejects.toThrow()
-    trace.restore()
-    expect(trace.output()).not.toContain(SIGNING_SECRET)
+    consoleOutput.restore()
+    expect(consoleOutput.output()).not.toContain(SIGNING_SECRET)
   })
 
-  // ── custom header × SDK debug trace ──────────────────────────────────────
+  // ── custom header × console output ──────────────────────────────────────
 
-  it('custom header value stays out of SDK debug trace on the success path', async () => {
+  it('custom header value stays out of console output on the success path', async () => {
     const { bucket } = await setup()
-    const trace = captureConsole()
+    const consoleOutput = captureConsole()
     await bucket.setNotificationRules([sensitiveRule()])
-    trace.restore()
-    expect(trace.output()).not.toContain(HEADER_VALUE)
+    consoleOutput.restore()
+    expect(consoleOutput.output()).not.toContain(HEADER_VALUE)
   })
 
-  it('custom header value stays out of SDK debug trace on the pre-authorization path', async () => {
+  it('custom header value stays out of console output on the pre-authorization path', async () => {
     const { client, bucket } = await setup()
     client.accountInfo.clear()
-    const trace = captureConsole()
+    const consoleOutput = captureConsole()
     await expect(bucket.setNotificationRules([sensitiveRule()])).rejects.toThrow()
-    trace.restore()
-    expect(trace.output()).not.toContain(HEADER_VALUE)
+    consoleOutput.restore()
+    expect(consoleOutput.output()).not.toContain(HEADER_VALUE)
   })
 
-  it('custom header value stays out of SDK debug trace on the api error path', async () => {
+  it('custom header value stays out of console output on the 503 API error path', async () => {
     const { bucket } = await setupWithServerError()
-    const trace = captureConsole()
+    const consoleOutput = captureConsole()
     await expect(bucket.setNotificationRules([sensitiveRule()])).rejects.toThrow()
-    trace.restore()
-    expect(trace.output()).not.toContain(HEADER_VALUE)
+    consoleOutput.restore()
+    expect(consoleOutput.output()).not.toContain(HEADER_VALUE)
   })
 
-  it('custom header value stays out of SDK debug trace on the simulator-rejected validation error path', async () => {
+  it('custom header value stays out of console output on the 400 API refusal path', async () => {
     const { bucket } = await setup()
-    const trace = captureConsole()
+    const consoleOutput = captureConsole()
     await expect(bucket.setNotificationRules([{ ...sensitiveRule(), name: '' }])).rejects.toThrow()
-    trace.restore()
-    expect(trace.output()).not.toContain(HEADER_VALUE)
+    consoleOutput.restore()
+    expect(consoleOutput.output()).not.toContain(HEADER_VALUE)
   })
 
   // ── signing secret × exception ───────────────────────────────────────────
@@ -208,14 +241,14 @@ describe('setNotificationRules keeps sensitive inputs out of diagnostics', () =>
     expect(exceptionText(error)).not.toContain(SIGNING_SECRET)
   })
 
-  it('signing secret stays out of exception text on the api error path', async () => {
+  it('signing secret stays out of exception text on the 503 API error path', async () => {
     const { bucket } = await setupWithServerError()
     const error = await thrownBy(bucket.setNotificationRules([sensitiveRule()]))
     expect(error).toBeInstanceOf(Error)
     expect(exceptionText(error)).not.toContain(SIGNING_SECRET)
   })
 
-  it('signing secret stays out of exception text on the simulator-rejected validation error path', async () => {
+  it('signing secret stays out of exception text on the 400 API refusal path', async () => {
     const { bucket } = await setup()
     const error = await thrownBy(bucket.setNotificationRules([{ ...sensitiveRule(), name: '' }]))
     expect(error).toBeInstanceOf(Error)
@@ -232,14 +265,14 @@ describe('setNotificationRules keeps sensitive inputs out of diagnostics', () =>
     expect(exceptionText(error)).not.toContain(HEADER_VALUE)
   })
 
-  it('custom header value stays out of exception text on the api error path', async () => {
+  it('custom header value stays out of exception text on the 503 API error path', async () => {
     const { bucket } = await setupWithServerError()
     const error = await thrownBy(bucket.setNotificationRules([sensitiveRule()]))
     expect(error).toBeInstanceOf(Error)
     expect(exceptionText(error)).not.toContain(HEADER_VALUE)
   })
 
-  it('custom header value stays out of exception text on the simulator-rejected validation error path', async () => {
+  it('custom header value stays out of exception text on the 400 API refusal path', async () => {
     const { bucket } = await setup()
     const error = await thrownBy(bucket.setNotificationRules([{ ...sensitiveRule(), name: '' }]))
     expect(error).toBeInstanceOf(Error)
