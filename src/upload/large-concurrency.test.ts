@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
 import { deterministicBytes } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { uploadLargeFile } from './large.ts'
 
@@ -20,7 +20,7 @@ function stop400(): HttpResponse {
 }
 
 async function recordingClient(minimumPartSize: number) {
-  const sim = new B2Simulator({ minimumPartSize })
+  const sim = await resetRemoteSimulator({ minimumPartSize })
   const inner = sim.transport()
   const startCalls: string[] = []
   const transport: HttpTransport = {
@@ -35,6 +35,7 @@ async function recordingClient(minimumPartSize: number) {
   const client = new B2Client({
     applicationKeyId: 'k',
     applicationKey: 'k',
+    realm: sim.realm,
     transport,
     retry: { maxRetries: 0 },
   })
