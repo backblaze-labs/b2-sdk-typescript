@@ -6,7 +6,7 @@ can't see it — so it doesn't exist. The entry point for agents is
 
 | Path | What |
 |---|---|
-| [`../AGENTS.md`](../AGENTS.md) | ~100-line operating map (start here). |
+| [`../AGENTS.md`](../AGENTS.md) | Operating map (start here). |
 | [`../ARCHITECTURE.md`](../ARCHITECTURE.md) | Subpath exports, source layout, key design decisions. |
 | [`design-docs/`](design-docs/) | ADRs — dated decision records + [status catalog](design-docs/index.md). |
 | [`design-docs/core-beliefs.md`](design-docs/core-beliefs.md) | Agent-first operating principles for this repo. |
