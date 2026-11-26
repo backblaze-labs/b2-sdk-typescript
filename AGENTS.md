@@ -77,6 +77,8 @@ per-engine browser matrix.
 
 ## Testing
 
+See the [testing guide](docs/testing.md) for test levels and evidence.
+
 Tests use the in-memory `B2Simulator` (no network):
 
 ```ts
