@@ -57,6 +57,7 @@ pnpm docs            # Generate TypeDoc API docs under ./api-docs
 pnpm clean           # rm -rf dist api-docs
 pnpm verify          # Full local gate (lint, typecheck, tests, build, exports) — mirrors CI
 pnpm run changelog:new  # Add a changie fragment for a user-visible change (see CONTRIBUTING.md)
+pnpm run verify:docs-consistency # Check documentation links and front matter
 pnpm run review:metrics # Review-health report for recently merged PRs (docs/review-process.md)
 ```
 

@@ -1,3 +1,12 @@
+---
+type: guide
+title: "Writing style"
+description: "Sets writing guidance for clear and consistent project documentation."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # Writing style
 
 Use these guidelines for new and edited documentation and TSDoc. They help

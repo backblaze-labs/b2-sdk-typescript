@@ -1,3 +1,12 @@
+---
+type: guide
+title: "Retry upload POST connection failures"
+description: "Records the plan for retrying upload connection failures."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # Retry upload POST connection failures
 
 Goal: make `Bucket.upload()` recover from a connection reset or socket timeout during `b2_upload_file` and `b2_upload_part` by default, using a fresh upload URL. Closes #343 through PR #344.

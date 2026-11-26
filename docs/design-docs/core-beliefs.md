@@ -1,3 +1,12 @@
+---
+type: guide
+title: "Core beliefs"
+description: "Records the principles that guide SDK design and maintenance."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # Core beliefs
 
 Agent-first operating principles for `@backblaze-labs/b2-sdk`. These are the

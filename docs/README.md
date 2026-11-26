@@ -1,3 +1,12 @@
+---
+type: guide
+title: "docs \u2014 system of record"
+description: "Introduces the documentation tree and its role as the system of record."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # docs — system of record
 
 Repo-local, versioned knowledge base. If it isn't here (or in code), an agent

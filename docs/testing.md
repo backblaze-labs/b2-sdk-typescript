@@ -1,3 +1,12 @@
+---
+type: guide
+title: "Testing"
+description: "Explains test levels and how to choose verification for changes."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # Testing
 
 Choose checks for the behavior changed and report what each check establishes.

@@ -183,7 +183,7 @@
     "verify:release": "pnpm run changelog:check && pnpm run test:release-policy && node scripts/verify-release-workflow.mjs",
     "verify:release-channel": "node scripts/verify-release-channel.mjs",
     "verify:ci-docs-filter": "node --test scripts/verify-docs-only-classifier.test.mjs",
-    "verify:docs-consistency": "node --test scripts/verify-docs-consistency.test.mjs scripts/verify-changelog-migration.test.mjs scripts/verify-use-b2-sdk.test.mjs scripts/verify-llms-txt.test.mjs",
+    "verify:docs-consistency": "node --test scripts/verify-docs-consistency.test.mjs scripts/verify-changelog-migration.test.mjs scripts/verify-use-b2-sdk.test.mjs scripts/docs-front-matter.test.mjs scripts/verify-llms-txt.test.mjs",
     "verify:exports": "node scripts/verify-package-exports.mjs",
     "verify:release-workflow": "node scripts/verify-release-workflow.mjs",
     "smoke:published": "node scripts/smoke-published-package.mjs",
