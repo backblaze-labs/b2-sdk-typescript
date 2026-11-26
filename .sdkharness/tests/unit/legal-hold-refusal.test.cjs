@@ -43,6 +43,17 @@ test('an unrelated refusal is not the legal-hold refusal', () => {
   }
 });
 
+test('a thrown non-Error value is not the legal-hold refusal, even with matching fields', () => {
+  // guard.explainMismatch (used by the leaf before this helper) rejects
+  // non-Error values; keep that rule.
+  for (const value of [
+    { status: 401, code: 'access_denied', message: 'Access Denied' },
+    { status: 403, code: 'file_lock_legal_hold_protected', message: 'Legal hold is on' },
+  ]) {
+    assert.equal(isLegalHoldRefusal(value), false, JSON.stringify(value));
+  }
+});
+
 test('lock.legal_hold uses the shared refusal rule', () => {
   const leaf = readFileSync(path.join(root, 'conformance', 'lock.legal_hold.cjs'), 'utf8');
   assert.match(leaf, /isLegalHoldRefusal\(refusal\)/);
