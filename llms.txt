@@ -2,6 +2,14 @@
 
 > The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript. Zero runtime dependencies. Isomorphic — runs unmodified in Node.js 22.3+, Bun, Deno, browsers, Cloudflare Workers, and Vercel Edge.
 
+## Start here
+
+- [Agent guide](https://github.com/backblaze-labs/b2-sdk-typescript/blob/main/AGENTS.md)
+- [Architecture](https://github.com/backblaze-labs/b2-sdk-typescript/blob/main/ARCHITECTURE.md)
+- [Migration guide](https://github.com/backblaze-labs/b2-sdk-typescript/blob/main/MIGRATION.md)
+- [Contributing](https://github.com/backblaze-labs/b2-sdk-typescript/blob/main/CONTRIBUTING.md)
+- [Security](https://github.com/backblaze-labs/b2-sdk-typescript/blob/main/SECURITY.md)
+
 ## Install
 
 ```bash
@@ -135,9 +143,14 @@ const key = await client.createKey({ keyName: 'my-key', capabilities: [Capabilit
 ### In-process simulator (for tests)
 
 ```ts
+import { B2Client } from '@backblaze-labs/b2-sdk'
 import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 const sim = new B2Simulator()
-const client = sim.createClient()
+const client = new B2Client({
+  applicationKeyId: 'test',
+  applicationKey: 'test',
+  transport: sim.transport(),
+})
 await client.authorize()
 ```
 
