@@ -1,3 +1,12 @@
+---
+type: guide
+title: "Quality score"
+description: "Tracks quality goals and current assessment of the SDK."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # Quality score
 
 A candid, per-domain read on how battle-tested each part of the SDK is, and where

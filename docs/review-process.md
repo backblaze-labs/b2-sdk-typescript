@@ -1,3 +1,12 @@
+---
+type: guide
+title: "Review process: layers, tiers and metrics"
+description: "Describes review layers, risk tiers, and review metrics."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # Review process: layers, tiers and metrics
 
 How `@backblaze-labs/b2-sdk` keeps review fast without letting bugs through, adapted

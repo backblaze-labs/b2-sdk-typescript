@@ -1,3 +1,12 @@
+---
+type: guide
+title: "Architecture Decision Records"
+description: "Indexes architecture decision records for the SDK."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # Architecture Decision Records
 
 Dated design docs (ADRs) for decisions that shape public API, package layout, authorization, simulator behavior, compatibility, or security posture. This is part of the `docs/` system of record; the entry point is [`AGENTS.md`](../../AGENTS.md).

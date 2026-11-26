@@ -1,3 +1,12 @@
+---
+type: guide
+title: "Active exec-plans"
+description: "Indexes active implementation plans and their purpose."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # Active exec-plans
 
 In-flight plans that outlive a single session — multi-step work an agent should

@@ -1,3 +1,12 @@
+---
+type: guide
+title: "Tech-debt tracker"
+description: "Tracks known technical debt and follow-up work."
+status: active
+owner: "@ffumero2003"
+stale_after: 2027-11-26
+---
+
 # Tech-debt tracker
 
 Standing list of known, deliberate deferrals — the things a fresh agent would
