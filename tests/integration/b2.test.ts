@@ -42,6 +42,7 @@ import {
   uploadRawPart,
   withRecommendedPartSize,
 } from '../helpers/live-b2.ts'
+import { uploadRawFile } from '../helpers/raw-upload.ts'
 
 requireB2IntegrationCredentials()
 
@@ -383,12 +384,10 @@ describe.skipIf(skip)('B2 integration', () => {
     const cacheControl = 'max-age=60, stale-while-revalidate=30'
     const contentEncoding = 'gzip, br'
     const contentSha1 = await sha1Hex(data)
-    const uploadUrl = await raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
-
-    const uploaded = await raw.uploadFile(
-      uploadUrl.uploadUrl,
+    const uploaded = await uploadRawFile(
+      client,
+      bucket.id,
       {
-        authorization: uploadUrl.authorizationToken,
         fileName,
         contentType: 'text/plain',
         contentLength: data.byteLength,
