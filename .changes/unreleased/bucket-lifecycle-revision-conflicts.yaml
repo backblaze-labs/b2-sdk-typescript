@@ -1,3 +1,0 @@
-kind: Fixed
-body: "Bucket lifecycle rule additions and removals retry revision conflicts using a fresh rule set, preserving concurrent updates."
-time: 2026-11-21T00:00:00Z

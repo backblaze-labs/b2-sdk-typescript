@@ -1,3 +1,0 @@
-kind: Fixed
-body: "The sync CLI exits nonzero when an action fails. Large uploads reject invalid concurrency before reading or starting, and server errors while finishing a large file are treated as ambiguous without automatic cancellation."
-time: 2026-11-21T00:00:00Z

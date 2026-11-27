@@ -1,3 +1,0 @@
-kind: Fixed
-body: "Concurrent replication rule updates retry revision conflicts instead of silently overwriting one another."
-time: 2026-11-25T00:00:00Z
