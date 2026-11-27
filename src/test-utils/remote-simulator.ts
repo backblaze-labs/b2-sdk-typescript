@@ -131,21 +131,12 @@ async function connect(): Promise<SimulatorConnection> {
     const { browserConnection } = await import('./remote-simulator-browser.ts')
     return await browserConnection()
   }
-  const { processSimulator } = await import('./remote-simulator-process.ts')
+  const { controlRequest, processSimulator } = await import('./remote-simulator-process.ts')
   const server = await processSimulator()
   return {
     apiUrl: server.apiUrl,
     controlUrl: server.controlUrl,
-    async control(method, path, body) {
-      const response = await fetch(`${server.controlUrl}${path}`, {
-        method,
-        ...(body !== undefined
-          ? { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }
-          : {}),
-      })
-      const text = await response.text()
-      return { status: response.status, body: text === '' ? null : JSON.parse(text) }
-    },
+    control: (method, path, body) => controlRequest(server.controlUrl, method, path, body),
     transport: () => realmOnlyTransport(new FetchTransport(), [server.apiUrl, server.httpsUrl]),
   }
 }
