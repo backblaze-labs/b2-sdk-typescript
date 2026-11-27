@@ -53,8 +53,9 @@ canonical behavior explicit.
 without `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` so contributors can work
 offline. Pull requests run the storage and application-key integration files against the private B2
 Simulator and fail if that mandatory run cannot start. The GitHub `Integration
-(real B2)` workflow runs weekly and through `workflow_dispatch`; missing live
-secrets fail the job. The integration
+(real B2)` workflow runs weekly and through `workflow_dispatch`; missing
+required live secrets fail the job, while the optional key-management secrets
+skip the application-key lifecycle job with a notice. The integration
 setup logs each live setup step (`authorize`, `list buckets`, stale bucket
 cleanup, and test bucket creation) with timings and step-specific timeouts so
 credential, permission, cleanup, and network failures are diagnosable.

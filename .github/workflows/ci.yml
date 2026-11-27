@@ -83,6 +83,9 @@ jobs:
       # The SDK and src/simulator/ coverage gates must split src/ between them.
       - run: pnpm run verify:coverage-gates
         if: ${{ needs.changes.outputs.code == 'true' }}
+      # integration.yml and simulator-integration.yml triggers and key handling.
+      - run: pnpm run verify:integration-workflow
+        if: ${{ needs.changes.outputs.code == 'true' }}
 
   test-fast:
     name: Test fast (${{ matrix.os }} / Node ${{ matrix.node-version }})

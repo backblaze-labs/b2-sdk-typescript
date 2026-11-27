@@ -25,7 +25,8 @@ name: Integration (real B2)
 # Destructive Partner and Backup allow-flags are forwarded only for
 # workflow_dispatch on the first Node matrix leg, so scheduled runs stay
 # read-only.
-# Required dedicated credentials for the trusted application-key lifecycle job:
+# Optional dedicated credentials for the trusted application-key lifecycle job
+# (without both, that job skips with a notice; with both, broken ones fail it):
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY_ID
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY
 # Optional if the key-management credential cannot list or create buckets:
@@ -38,7 +39,7 @@ name: Integration (real B2)
 # Recommended: scope the key to a dedicated test account. The tests create
 # ephemeral `sdk-it-<timestamp>` buckets and clean up after themselves (including
 # a defensive sweep at startup for stale `sdk-it-*` / legacy `sdk-test-*` buckets
-# from previously-crashed runs). Runs fail if these secrets are absent
+# from previously-crashed runs). Runs fail if the required secrets are absent
 # so scheduled live-B2 evidence cannot accidentally become an all-skipped run.
 
 on:
@@ -193,8 +194,14 @@ jobs:
           B2_KEY_MANAGEMENT_BUCKET_ID: ${{ secrets.B2_KEY_MANAGEMENT_BUCKET_ID }}
           B2_KEY_MANAGEMENT_REQUIRE_CREDENTIALS: '1'
         run: |
+          # Optional secrets: without both, skip with a visible notice instead of
+          # failing the weekly run. Half a pair is a misconfiguration and fails.
+          if [ -z "$B2_KEY_MANAGEMENT_APPLICATION_KEY_ID" ] && [ -z "$B2_KEY_MANAGEMENT_APPLICATION_KEY" ]; then
+            echo "::notice::B2 key-management secrets are not configured; skipping application-key lifecycle tests."
+            exit 0
+          fi
           if [ -z "$B2_KEY_MANAGEMENT_APPLICATION_KEY_ID" ] || [ -z "$B2_KEY_MANAGEMENT_APPLICATION_KEY" ]; then
-            echo "::error::B2_KEY_MANAGEMENT_APPLICATION_KEY_ID / B2_KEY_MANAGEMENT_APPLICATION_KEY are required."
+            echo "::error::B2_KEY_MANAGEMENT_APPLICATION_KEY_ID / B2_KEY_MANAGEMENT_APPLICATION_KEY must be configured together."
             exit 1
           fi
           pnpm exec vitest run --config vitest.integration.ts tests/integration/keys.test.ts
