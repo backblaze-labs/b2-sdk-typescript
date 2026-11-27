@@ -101,6 +101,8 @@ describe('resolveServeScript (where the pinned simulator comes from)', () => {
         'user.name=t',
         '-c',
         'user.email=t@example.com',
+        '-c',
+        'commit.gpgsign=false',
         'commit',
         '-q',
         '--allow-empty',
