@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import type { B2Client } from '../client.ts'
 import { type ContentSource, FileSource } from '../streams/source.ts'
-import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
+import { deterministicBytes, readStream } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 
 describe.skipIf(process.platform === 'win32')('FileSource uploads', () => {
@@ -15,7 +16,7 @@ describe.skipIf(process.platform === 'win32')('FileSource uploads', () => {
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'b2sdk-upload-filesource-'))
-    ;({ client } = makeClient({ minimumPartSize: 100, recommendedPartSize: 100 }))
+    ;({ client } = await makeRemoteClient({ minimumPartSize: 100, recommendedPartSize: 100 }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'file-source-upload',

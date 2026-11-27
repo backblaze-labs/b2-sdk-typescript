@@ -13,7 +13,6 @@ import {
 } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import type { RawClient } from '../raw/index.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import {
   BufferSource,
@@ -27,9 +26,13 @@ import {
   deterministicBytes,
   jsonErrorResponse,
   jsonResponse,
-  makeClient,
   readStream,
 } from '../test-utils/index.ts'
+import {
+  makeRemoteClient,
+  type RemoteSimulator,
+  resetRemoteSimulator,
+} from '../test-utils/remote-simulator.ts'
 import { Capability } from '../types/auth.ts'
 import { BucketRetentionMode, BucketType } from '../types/bucket.ts'
 import {
@@ -67,15 +70,16 @@ import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
  * round-trip fits comfortably under the fast-tier budget.
  */
 
-function makeSmallPartClient(): { client: B2Client; sim: B2Simulator } {
-  return makeClient({ minimumPartSize: 100_000 })
+async function makeSmallPartClient(): Promise<{ client: B2Client; sim: RemoteSimulator }> {
+  return await makeRemoteClient({ minimumPartSize: 100_000 })
 }
 
 async function authorizeWithKey(
-  sim: B2Simulator,
+  sim: RemoteSimulator,
   key: { readonly applicationKeyId: string; readonly applicationKey: string },
 ): Promise<B2Client> {
   const client = new B2Client({
+    realm: sim.realm,
     applicationKeyId: key.applicationKeyId,
     applicationKey: key.applicationKey,
     transport: sim.transport(),
@@ -85,11 +89,11 @@ async function authorizeWithKey(
   return client
 }
 
-function makeClientWithOneFreshUrlFailure(endpoint: string): {
+async function makeClientWithOneFreshUrlFailure(endpoint: string): Promise<{
   client: B2Client
   getFreshUrlCalls(): number
-} {
-  const sim = new B2Simulator({ minimumPartSize: 100, recommendedPartSize: 100 })
+}> {
+  const sim = await resetRemoteSimulator({ minimumPartSize: 100, recommendedPartSize: 100 })
   const inner = sim.transport()
   let freshUrlCalls = 0
   const transport: HttpTransport = {
@@ -104,6 +108,7 @@ function makeClientWithOneFreshUrlFailure(endpoint: string): {
     },
   }
   const client = new B2Client({
+    realm: sim.realm,
     applicationKeyId: 'test-key-id',
     applicationKey: 'test-key',
     transport,
@@ -425,14 +430,15 @@ describe('uploadLargeFile cleanup paths', () => {
     // Fail every part-upload (not the URL fetch). With concurrency=1 the
     // first part is dispatched and fails, the engine then enters the
     // evict-then-rethrow path.
-    const sim = new B2Simulator({ minimumPartSize: 100_000 })
-    sim.injectFailure({
-      on: 'b2_upload_part?fileId=',
+    const sim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
+    await sim.injectFailure({
+      on: 'b2_upload_part',
       status: 400,
       code: 'bad_request',
       message: 'simulated upload_part failure',
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: sim.transport(),
@@ -469,14 +475,15 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('does not cancel an explicit resume file ID after upload failure', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000 })
-    sim.injectFailure({
-      on: 'b2_upload_part?fileId=',
+    const sim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
+    await sim.injectFailure({
+      on: 'b2_upload_part',
       status: 400,
       code: 'bad_request',
       message: 'simulated resumed upload_part failure',
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: sim.transport(),
@@ -833,7 +840,7 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('aborts and drains parallel part work before cancelling the large file', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
     const inner = sim.transport()
     let part2Started!: () => void
     const part2StartedPromise = new Promise<void>((resolve) => {
@@ -871,6 +878,7 @@ describe('uploadLargeFile cleanup paths', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -898,7 +906,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('aborts queued multipart sibling tasks after a source read fails', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'multipart-sibling-abort',
@@ -928,7 +939,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('aborts in-flight parallel source reads after a sibling read fails', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'multipart-read-abort',
@@ -954,7 +968,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('accepts an untriggered abort signal for multipart uploads', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'multipart-live-signal',
@@ -977,7 +994,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('rejects a stream source that emits extra bytes after planned parts', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-extra-after-plan',
@@ -1006,7 +1026,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('preserves the initiating multipart failure over sibling aborts', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let markFirstUploadStarted!: () => void
     const firstUploadStarted = new Promise<void>((resolve) => {
@@ -1031,6 +1054,7 @@ describe('uploadLargeFile cleanup paths', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -1058,23 +1082,24 @@ describe('uploadLargeFile cleanup paths', () => {
     // Force EVERY `b2_upload_part` to fail AND `b2_cancel_large_file` to
     // fail, so the outer cleanup's best-effort swallow runs. The original upload_part error must still be
     // the one that propagates to the caller.
-    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
     // Match the part-upload URL (`b2_upload_part?fileId=`) — using bare
     // `b2_upload_part` would also match `b2_get_upload_part_url` and
     // break URL fetching.
-    sim.injectFailure({
-      on: 'b2_upload_part?fileId=',
+    await sim.injectFailure({
+      on: 'b2_upload_part',
       status: 400,
       code: 'bad_request',
       message: 'simulated upload_part failure',
     })
-    sim.injectFailure({
+    await sim.injectFailure({
       on: 'b2_cancel_large_file',
       status: 500,
       code: 'internal_error',
       message: 'simulated cancel failure',
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: sim.transport(),
@@ -1106,11 +1131,15 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('does not cancel when finishLargeFile commits but its response body cannot be parsed', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let finishCalls = 0
     let cancelCalls = 0
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       retry: { maxRetries: 0 },
@@ -1162,11 +1191,15 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('does not retry or cancel when finishLargeFile times out after commit', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let finishCalls = 0
     let cancelCalls = 0
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       retry: { maxRetries: 2, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
@@ -1217,7 +1250,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('cancels instead of finishing when a sliceable upload aborts after all parts', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'finish-pre-abort-sliceable',
@@ -1252,7 +1288,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('returns promptly and cancels later when startLargeFile resolves after abort', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'start-pending-abort',
@@ -1294,7 +1333,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('cancels instead of finishing when a forward-only upload aborts after all parts', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'finish-pre-abort-stream',
@@ -1336,7 +1378,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('reports reconciliation metadata when aborting while finish is pending', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'finish-pending-abort',
@@ -1388,10 +1433,14 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('does not cancel a forward-only upload with an ambiguous finish response', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let cancelCalls = 0
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       retry: { maxRetries: 0 },
@@ -1443,7 +1492,10 @@ describe('uploadLargeFile cleanup paths', () => {
   })
 
   it('aborts and drains parallel part work before cancelling the large file', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let releasePartOneUpload: (() => void) | undefined
     const partOneUploadStarted = new Promise<void>((resolve) => {
@@ -1479,6 +1531,7 @@ describe('uploadLargeFile cleanup paths', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -1595,9 +1648,10 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries a transient small-file upload failure with a fresh upload URL', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file')
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -1626,7 +1680,7 @@ describe('upload fresh-URL retry', () => {
     ['reset_mid_request', 'connection reset while sending request'],
     ['stall', 'socket timed out waiting for response'],
   ])('retries %s with a fresh upload URL by default', async (_scenario, message) => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const uploadUrls: string[] = []
     let getUploadUrlCalls = 0
@@ -1650,6 +1704,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -1681,7 +1736,10 @@ describe('upload fresh-URL retry', () => {
     ['reset_mid_request', 'connection reset while sending part'],
     ['stall', 'part socket timed out waiting for response'],
   ])('retries part %s with a fresh part URL by default', async (_scenario, message) => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     const partUrls: string[] = []
     const partNumbers: string[] = []
@@ -1711,6 +1769,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -1743,9 +1802,10 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('continues fresh-URL recovery when the upload retry observer throws', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file')
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -1771,9 +1831,13 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries a transient multipart part failure with a fresh part URL', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const harness = freshUrlRetryHarness(sim.transport(), 'part')
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -1802,9 +1866,13 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries a transient streaming-source part failure with a fresh part URL', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const harness = freshUrlRetryHarness(sim.transport(), 'part')
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -1839,9 +1907,13 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries a transient write-stream part failure with a fresh part URL', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const harness = freshUrlRetryHarness(sim.transport(), 'part')
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -1871,7 +1943,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('bounds duplicate small-file versions when success is stored but 5xx is returned', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
     let uploadAttempts = 0
@@ -1896,6 +1968,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -1923,9 +1996,10 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('continues fresh-URL retry when the retry observer throws', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file')
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -1951,7 +2025,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('shares the retry budget with fresh upload URL fetch failures', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
     let uploadAttempts = 0
@@ -1978,6 +2052,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2001,7 +2076,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('honors per-call retry overrides for Bucket.upload small files', async () => {
-    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_url')
+    const { client, getFreshUrlCalls } = await makeClientWithOneFreshUrlFailure('b2_get_upload_url')
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'bucket-small-retry-override',
@@ -2019,7 +2094,8 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('honors per-call retry overrides for Bucket.upload multipart files', async () => {
-    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
+    const { client, getFreshUrlCalls } =
+      await makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'bucket-large-retry-override',
@@ -2039,7 +2115,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('honors per-call retry overrides for B2Object.upload small files', async () => {
-    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_url')
+    const { client, getFreshUrlCalls } = await makeClientWithOneFreshUrlFailure('b2_get_upload_url')
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'object-small-retry-override',
@@ -2056,7 +2132,8 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('honors per-call retry overrides for B2Object.upload multipart files', async () => {
-    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
+    const { client, getFreshUrlCalls } =
+      await makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'object-large-retry-override',
@@ -2075,7 +2152,8 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('honors per-call retry overrides for B2Object.createWriteStream', async () => {
-    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
+    const { client, getFreshUrlCalls } =
+      await makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-retry-override',
@@ -2097,7 +2175,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('stops sending payloads immediately when aborted from the upload retry callback', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let uploadAttempts = 0
     const controller = new AbortController()
@@ -2112,6 +2190,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2137,7 +2216,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('does not retry a lost 2xx upload response body read by default', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let uploadAttempts = 0
     const transport: HttpTransport = {
@@ -2154,6 +2233,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2177,7 +2257,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('can opt into retrying a lost 2xx upload response body read with a fresh URL', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let uploadAttempts = 0
     let getUploadUrlCalls = 0
@@ -2205,6 +2285,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2231,7 +2312,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries a truncated 2xx upload JSON body when explicitly enabled', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let uploadAttempts = 0
     let getUploadUrlCalls = 0
@@ -2258,6 +2339,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2282,7 +2364,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('can disable retry after a lost 2xx upload response body', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let uploadAttempts = 0
     const transport: HttpTransport = {
@@ -2299,6 +2381,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2323,7 +2406,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('does not retry upload URLs rejected by the SSRF guard', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
     let guardedUploadAttempts = 0
@@ -2346,6 +2429,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2588,7 +2672,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('refreshes a stale pooled upload URL reported as bad_request', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
     let uploadAttempts = 0
@@ -2613,6 +2697,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2645,7 +2730,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('does not retry deterministic bad_request upload failures', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let uploadAttempts = 0
     const transport: HttpTransport = {
@@ -2658,6 +2743,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2680,7 +2766,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('passes the abort signal to fresh upload URL fetches', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const controller = new AbortController()
     let getUploadUrlCalls = 0
@@ -2704,6 +2790,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2729,7 +2816,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries 429 upload failures in place without fetching a fresh URL', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file', {
       status: 429,
       code: 'too_many_requests',
@@ -2737,6 +2824,7 @@ describe('upload fresh-URL retry', () => {
       count: 1,
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -2763,7 +2851,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries a single-file upload POST network error by default', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
     let uploadAttempts = 0
@@ -2783,6 +2871,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2806,7 +2895,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries upload network failures with response-body retries disabled', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
     let uploadAttempts = 0
@@ -2831,6 +2920,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2854,7 +2944,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries upload timeouts after the file may have been stored', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
     let uploadAttempts = 0
@@ -2880,6 +2970,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -2903,7 +2994,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('recovers expired upload tokens through fresh URL retry without reauth', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file', {
       status: 401,
       code: 'expired_auth_token',
@@ -2911,6 +3002,7 @@ describe('upload fresh-URL retry', () => {
       count: 1,
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -2934,7 +3026,7 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('recovers bad upload tokens through fresh URL retry for small files', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file', {
       status: 401,
       code: 'bad_auth_token',
@@ -2942,6 +3034,7 @@ describe('upload fresh-URL retry', () => {
       count: 1,
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -2965,7 +3058,10 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('recovers bad upload tokens through fresh URL retry for multipart parts', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const harness = freshUrlRetryHarness(sim.transport(), 'part', {
       status: 401,
       code: 'bad_auth_token',
@@ -2973,6 +3069,7 @@ describe('upload fresh-URL retry', () => {
       count: 1,
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -2998,7 +3095,10 @@ describe('upload fresh-URL retry', () => {
   })
 
   it('retries 429 part upload failures in place without fetching a fresh part URL', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const harness = freshUrlRetryHarness(sim.transport(), 'part', {
       status: 429,
       code: 'too_many_requests',
@@ -3006,6 +3106,7 @@ describe('upload fresh-URL retry', () => {
       count: 1,
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
@@ -3036,7 +3137,10 @@ describe('upload fresh-URL retry', () => {
   it.each([false, true])(
     'retries a lost part response body only with opt-in set to %s',
     async (retryResponseBodyFailures) => {
-      const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+      const sim = await resetRemoteSimulator({
+        minimumPartSize: 100_000,
+        recommendedPartSize: 100_000,
+      })
       const inner = sim.transport()
       const partUrls: string[] = []
       const partNumbers: string[] = []
@@ -3069,6 +3173,7 @@ describe('upload fresh-URL retry', () => {
         },
       }
       const client = new B2Client({
+        realm: sim.realm,
         applicationKeyId: 'k',
         applicationKey: 'k',
         transport,
@@ -3110,7 +3215,10 @@ describe('upload fresh-URL retry', () => {
   )
 
   it('retries multipart part timeouts after the part may have been stored', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let getUploadPartUrlCalls = 0
     let uploadPartAttempts = 0
@@ -3138,6 +3246,7 @@ describe('upload fresh-URL retry', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -3166,7 +3275,7 @@ describe('upload fresh-URL retry', () => {
 
 describe('upload scoped handles ignore runtime scope overrides', () => {
   it('keeps Bucket.upload small-file uploads in the bound bucket', async () => {
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bound = await client.createBucket({
       bucketName: 'bound-small',
@@ -3189,7 +3298,10 @@ describe('upload scoped handles ignore runtime scope overrides', () => {
   })
 
   it('keeps Bucket.upload multipart uploads in the bound bucket', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bound = await client.createBucket({
       bucketName: 'bound-large',
@@ -3215,7 +3327,7 @@ describe('upload scoped handles ignore runtime scope overrides', () => {
   })
 
   it('keeps B2Object.upload small-file uploads on the bound bucket and name', async () => {
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bound = await client.createBucket({
       bucketName: 'object-bound-small',
@@ -3240,7 +3352,10 @@ describe('upload scoped handles ignore runtime scope overrides', () => {
   })
 
   it('keeps B2Object.upload multipart uploads on the bound bucket and name', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bound = await client.createBucket({
       bucketName: 'object-bound-large',
@@ -3270,12 +3385,12 @@ describe('upload scoped handles ignore runtime scope overrides', () => {
 
 describe('uploadLargeFile fresh multipart metadata', () => {
   let client: B2Client
-  let sim: B2Simulator
+  let sim: RemoteSimulator
   let bucket: Bucket
   let bucketId: string
 
   beforeEach(async () => {
-    const { client: c, sim: s } = makeSmallPartClient()
+    const { client: c, sim: s } = await makeSmallPartClient()
     client = c
     sim = s
     await client.authorize()
@@ -3343,7 +3458,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   })
 
   it('records the whole-file SHA-1 in large_file_sha1 metadata', async () => {
-    const { client: multipartClient } = makeClient({
+    const { client: multipartClient } = await makeRemoteClient({
       minimumPartSize: 100_000,
       recommendedPartSize: 100_000,
     })
@@ -3366,8 +3481,12 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   })
 
   it('auto-resumes an interrupted upload that carries large_file_sha1', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: sim.transport(),
@@ -3380,15 +3499,15 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     })
     const data = deterministicBytes(200_000)
     const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
-    sim.injectFailure({
-      on: 'b2_upload_part?fileId=',
+    await sim.injectFailure({
+      on: 'b2_upload_part',
       status: 400,
       code: 'bad_request',
       message: 'interrupt after first part',
       skip: 1,
       count: 1,
     })
-    sim.injectFailure({
+    await sim.injectFailure({
       on: 'b2_cancel_large_file',
       status: 500,
       code: 'internal_error',
@@ -3567,7 +3686,10 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       startOptions: { legalHold: LegalHoldValue.On },
     },
   ])('starts fresh when omitted $name is unreadable', async (scenario) => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     const transport: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
@@ -3594,6 +3716,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       },
     }
     const hiddenClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -3661,7 +3784,10 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   })
 
   it('fails closed when automatic resume cannot read bucket default retention', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     const transport: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
@@ -3683,6 +3809,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       },
     }
     const hiddenDefaultClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -3748,7 +3875,10 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   })
 
   it('fails high-level resume when fresh bucket defaults cannot be fetched', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)
@@ -3866,7 +3996,10 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   })
 
   it('automatic resume rejects candidates weaker than current bucket defaults', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const originalBucket = await client.createBucket({
       bucketName: 'resume-current-defaults',
@@ -3961,7 +4094,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   })
 
   it('fails closed when bucket default SSE is unreadable during resume', async () => {
-    const { client, sim } = makeClient({
+    const { client, sim } = await makeRemoteClient({
       sim: { minimumPartSize: 100_000, recommendedPartSize: 100_000, strictAuth: true },
       client: { retry: { maxRetries: 0 } },
     })
@@ -4043,8 +4176,8 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   it('leaves reused unfinished files available after local upload failures', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)
-    sim.injectFailure({
-      on: 'b2_upload_part?fileId=',
+    await sim.injectFailure({
+      on: 'b2_upload_part',
       status: 500,
       code: 'internal_error',
       message: 'simulated reused upload failure',
@@ -4204,7 +4337,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   })
 
   it('reports custom upload timestamp resume mismatches', async () => {
-    const { client } = makeClient({
+    const { client } = await makeRemoteClient({
       minimumPartSize: 100_000,
       recommendedPartSize: 100_000,
       customUploadTimestampsEnabled: true,
@@ -4305,7 +4438,10 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   it('reuploads automatic resume parts even when an unfinished part has matching SHA-1', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)
-    const sim = new B2Simulator({ minimumPartSize: partSize, recommendedPartSize: partSize })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: partSize,
+      recommendedPartSize: partSize,
+    })
     const inner = sim.transport()
     let countResumeUploads = false
     let resumeUploadPartAttempts = 0
@@ -4318,6 +4454,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -4759,7 +4896,7 @@ describe('uploadLargeFile control-plane aborts', () => {
 
   it('rejects an unknown explicit resumeFileId before inspecting or uploading parts', async () => {
     const partSize = 100_000
-    const { client } = makeSmallPartClient()
+    const { client } = await makeSmallPartClient()
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'unknown-explicit-resume',
@@ -4790,17 +4927,18 @@ describe('uploadSmallFile cleanup path', () => {
   it('evicts the upload URL and rethrows when b2_upload_file fails', async () => {
     // Force b2_upload_file to return 400. uploadSmallFile must call
     // evictUploadUrl and rethrow.
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     // The small-file upload URL is `b2_upload_file?bucketId=...`. Matching
     // on `b2_upload_file?` is sufficient to distinguish from
     // `b2_upload_part`/`b2_get_upload_url`.
-    sim.injectFailure({
-      on: 'b2_upload_file?',
+    await sim.injectFailure({
+      on: 'b2_upload_file',
       status: 400,
       code: 'bad_request',
       message: 'simulated upload_file failure',
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: sim.transport(),
@@ -4827,7 +4965,7 @@ describe('uploadSmallFile cleanup path', () => {
     // emitted events correctly). After the wiring, the small-file path
     // should fire at least one event with the documented shape: a single
     // "part" worth of bytes, partsCompleted: 1, totalParts: 1.
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'small-progress',
@@ -4863,7 +5001,7 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects explicit resumeFileId on Bucket.upload small-file path', async () => {
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'small-resume-id-bucket',
@@ -4880,7 +5018,7 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects explicit resumeFileId on B2Object.upload small-file path', async () => {
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'small-resume-id-object',
@@ -4896,7 +5034,7 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('aborts while buffering a forward-only small-file source', async () => {
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'small-forward-abort',
@@ -4936,7 +5074,10 @@ describe('uploadSmallFile cleanup path', () => {
     // so `bucket.upload`'s small-vs-large dispatch picks the multipart
     // path for a 200 KB payload. Otherwise the file fits in the small
     // path and gets a real per-file SHA-1.
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'sha1-normalize',
@@ -4971,7 +5112,10 @@ describe('uploadSmallFile cleanup path', () => {
     // (one partSize buffer in flight at a time), without requiring the
     // caller to pre-buffer the whole file. Without this fix,
     // `source.slice()` would throw inside uploadLargeFile.
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-multipart',
@@ -5026,7 +5170,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects too many consecutive empty chunks in a streaming multipart source', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-empty-spin',
@@ -5051,7 +5198,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects a streaming multipart source that ends before its advertised size', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-short',
@@ -5081,7 +5231,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects a streaming multipart source that emits more than its advertised size', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-long',
@@ -5112,7 +5265,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('cancels a streaming multipart source when the upload aborts', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-abort-cancel',
@@ -5146,7 +5302,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('cancels a pending streaming multipart read when the upload aborts', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-pending-abort',
@@ -5192,7 +5351,7 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects resumeFileId on streaming sources before listing parts', async () => {
-    const { client } = makeSmallPartClient()
+    const { client } = await makeSmallPartClient()
     await client.authorize()
     const listParts = vi.spyOn(client.raw, 'listParts')
     const readable = new ReadableStream<Uint8Array>({
@@ -5217,7 +5376,10 @@ describe('uploadSmallFile cleanup path', () => {
     // Covers the SSE conditional spread inside the streaming part loop.
     // The simulator accepts SSE-B2 without enforcing key material, so we
     // can verify it threads through without setting up real keys.
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-sse',
@@ -5247,14 +5409,18 @@ describe('uploadSmallFile cleanup path', () => {
     // b2_upload_part request fails, the sequential path must evict the
     // URL from the pool and rethrow so the outer cleanup can fire the
     // best-effort cancelLargeFile.
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
-    sim.injectFailure({
-      on: 'b2_upload_part?fileId=',
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
+    await sim.injectFailure({
+      on: 'b2_upload_part',
       status: 400,
       code: 'bad_request',
       message: 'simulated streaming upload_part failure',
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: sim.transport(),
@@ -5293,14 +5459,18 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('cancels an async iterable source when sequential multipart upload fails', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
-    sim.injectFailure({
-      on: 'b2_upload_part?fileId=',
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
+    await sim.injectFailure({
+      on: 'b2_upload_part',
       status: 400,
       code: 'bad_request',
       message: 'simulated async iterable upload_part failure',
     })
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: sim.transport(),
@@ -5342,7 +5512,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects a forward-only source that emits more bytes than advertised', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-extra-bytes',
@@ -5375,7 +5548,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects extra forward-only bytes after an exact planned boundary', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-extra-boundary',
@@ -5402,7 +5578,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('accepts trailing empty forward-only chunks after advertised bytes', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-trailing-empty',
@@ -5438,7 +5617,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects unbounded trailing empty forward-only chunks after advertised bytes', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-empty-trailer-poison',
@@ -5480,7 +5662,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects unbounded empty forward-only chunks before data', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-empty-before-poison',
@@ -5518,7 +5703,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects unbounded empty forward-only chunks between parts', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-empty-between-poison',
@@ -5559,7 +5747,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('aborts a stalled forward-only multipart read', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-read-abort',
@@ -5612,7 +5803,10 @@ describe('uploadSmallFile cleanup path', () => {
     // resumeFileId, resume: true starts a fresh upload even when the source
     // is forward-only. The `resume` option lives on `uploadLargeFile` rather
     // than the high-level `bucket.upload`, so we call it directly.
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-resume',
@@ -5644,7 +5838,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('rejects resumeFileId on streaming-source uploads', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-resume-file-id',
@@ -5675,7 +5872,10 @@ describe('uploadSmallFile cleanup path', () => {
   })
 
   it('does not cancel a pre-existing unfinished file for stream resume misuse', async () => {
-    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-resume-preserve',
@@ -5723,7 +5923,7 @@ describe('uploadSmallFile cleanup path', () => {
   it('preserves a real contentSha1 hex digest for small-file uploads', async () => {
     // The normalization helper must NOT touch real SHA-1 hex digests:
     // small-file uploads have a real whole-file SHA-1.
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'sha1-preserve',

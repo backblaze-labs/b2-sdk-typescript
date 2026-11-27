@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
 import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
-import { deferred, makeClient, readStream } from '../test-utils/index.ts'
+import { deferred, readStream } from '../test-utils/index.ts'
+import { makeRemoteClient, resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { bucketId, fileId, largeFileId } from '../types/ids.ts'
@@ -19,7 +19,7 @@ describe('copyLargeFile', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -206,7 +206,10 @@ describe('copyLargeFile', () => {
   })
 
   it('aborts hanging copy parts before cleanup after a sibling failure', async () => {
-    const { client: c } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client: c } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await c.authorize()
     const bucket = await c.createBucket({
       bucketName: 'copy-settle-before-cleanup',
@@ -266,7 +269,10 @@ describe('copyLargeFile', () => {
   })
 
   it('reports reconciliation metadata when aborting while multipart-copy finish is pending', async () => {
-    const { client: c } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const { client: c } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     await c.authorize()
     const bucket = await c.createBucket({
       bucketName: 'copy-finish-abort',
@@ -325,7 +331,7 @@ describe('copyLargeFile', () => {
   })
 
   it('forwards contentType, fileInfo, and SSE overrides through the single-copy fast path', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const captured: { endpoint: string; body: Record<string, unknown> }[] = []
     const transport = {
@@ -342,6 +348,7 @@ describe('copyLargeFile', () => {
       },
     }
     const c = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -386,7 +393,7 @@ describe('copyLargeFile', () => {
   })
 
   it('Bucket.copyFile maps destination and source SSE options to the raw request', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const captured: { endpoint: string; body: Record<string, unknown> }[] = []
     const transport = {
@@ -403,6 +410,7 @@ describe('copyLargeFile', () => {
       },
     }
     const c = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,

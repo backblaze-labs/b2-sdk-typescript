@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { copyLargeFile } from '../copy/large.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
 import { deterministicBytes } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 
 describe('multipart copy part limit', () => {
@@ -49,7 +49,7 @@ describe('multipart copy part limit', () => {
 
 async function startCountingClient(bucketName: string) {
   // Tiny simulator parts exercise the 10,000-part boundary with small fixtures.
-  const sim = new B2Simulator({ minimumPartSize: 1 })
+  const sim = await resetRemoteSimulator({ minimumPartSize: 1 })
   const inner = sim.transport()
   const startCalls: string[] = []
   const transport: HttpTransport = {
@@ -63,6 +63,7 @@ async function startCountingClient(bucketName: string) {
     },
   }
   const client = new B2Client({
+    realm: sim.realm,
     applicationKeyId: 'k',
     applicationKey: 'k',
     transport,

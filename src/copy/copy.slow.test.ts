@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
-import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
+import { deterministicBytes, readStream } from '../test-utils/index.ts'
+import { makeRemoteClient, resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { copyLargeFile } from './large.ts'
@@ -21,7 +21,7 @@ describe('copyLargeFile (slow)', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -55,7 +55,7 @@ describe('copyLargeFile (slow)', () => {
   })
 
   it('cancels the unfinished large file when a copyPart fails', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let copyPartCalls = 0
     const transport = {
@@ -68,6 +68,7 @@ describe('copyLargeFile (slow)', () => {
       },
     }
     const c = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -137,7 +138,7 @@ describe('copyLargeFile (slow)', () => {
   })
 
   it('forwards contentType, fileInfo, and SSE overrides through the multipart path', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const captured: { endpoint: string; body: Record<string, unknown> }[] = []
     const transport = {
@@ -154,6 +155,7 @@ describe('copyLargeFile (slow)', () => {
       },
     }
     const c = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -203,7 +205,7 @@ describe('copyLargeFile (slow)', () => {
   })
 
   it('inherits source contentType when no override is supplied', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const startBodies: Record<string, unknown>[] = []
     const transport = {
@@ -219,6 +221,7 @@ describe('copyLargeFile (slow)', () => {
       },
     }
     const c = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -257,8 +260,9 @@ describe('copyLargeFile (slow)', () => {
     // stays under the ~60 s vitest IPC RPC budget when v8 coverage
     // instrumentation is on. The default-of-4 branch in copyLargeFile is
     // independent of part size.
-    const smallSim = new B2Simulator({ minimumPartSize: 100_000 })
+    const smallSim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
     const smallClient = new B2Client({
+      realm: smallSim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: smallSim.transport(),
@@ -295,8 +299,9 @@ describe('copyLargeFile (slow)', () => {
     // Uses a small-part simulator so the exact-N-part-boundary control-flow
     // test stays under the ~60 s vitest IPC RPC budget when v8 coverage
     // instrumentation is on. The boundary logic is independent of part size.
-    const smallSim = new B2Simulator({ minimumPartSize: 100_000 })
+    const smallSim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
     const smallClient = new B2Client({
+      realm: smallSim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: smallSim.transport(),
@@ -331,7 +336,7 @@ describe('copyLargeFile (slow)', () => {
   })
 
   it('reports ambiguous multipart-copy transport errors without cancelling', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let cancelCalls = 0
     const transport = {
@@ -344,6 +349,7 @@ describe('copyLargeFile (slow)', () => {
       },
     }
     const c = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -391,7 +397,7 @@ describe('copyLargeFile (slow)', () => {
   })
 
   it('reports ambiguous multipart-copy finish without cancelling it', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
     const inner = sim.transport()
     let cancelCalls = 0
     const transport = {
@@ -408,6 +414,7 @@ describe('copyLargeFile (slow)', () => {
       },
     }
     const c = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -449,7 +456,7 @@ describe('copyLargeFile (slow)', () => {
   })
 
   it('swallows errors from b2_cancel_large_file during cleanup', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let copyPartCalls = 0
     const transport = {
@@ -465,6 +472,7 @@ describe('copyLargeFile (slow)', () => {
       },
     }
     const c = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,

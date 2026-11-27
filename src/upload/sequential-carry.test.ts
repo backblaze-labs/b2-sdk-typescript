@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { StreamSource } from '../streams/source.ts'
 import { readStream } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { uploadLargeFile } from './large.ts'
 
 describe('sequential multipart source ownership', () => {
   it('preserves carried bytes when the producer reuses a boundary-spanning buffer', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 4, recommendedPartSize: 4 })
+    const sim = await resetRemoteSimulator({ minimumPartSize: 4, recommendedPartSize: 4 })
     const inner = sim.transport()
     let release: () => void = () => {}
     const uploadedFirst = new Promise<void>((resolve) => {
@@ -31,6 +31,7 @@ describe('sequential multipart source ownership', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport,

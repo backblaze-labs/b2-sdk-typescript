@@ -21,6 +21,7 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process'
+import { request as httpRequest } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { resolveServeScript } from '../../scripts/b2-simulator/pin.mjs'
 
@@ -187,4 +188,63 @@ export function processSimulator(): Promise<SimulatorProcess> {
     holder[SINGLETON] = pending
   }
   return pending
+}
+
+/**
+ * Sends one control-plane request on a fresh connection.
+ *
+ * Control requests do not go through the global `fetch`: its keep-alive pool
+ * can hand out a socket the server has already closed as idle (the server's
+ * keep-alive timeout runs out while a long, CPU-bound test blocks the test
+ * process's event loop, as under coverage), and the next reset then fails with
+ * `ECONNRESET`. A connection per control request has no idle socket to reuse.
+ * It also keeps working when a test replaces `globalThis.fetch`.
+ *
+ * @param controlUrl - Origin of the control plane.
+ * @param method - HTTP method.
+ * @param path - Control route, such as `/reset`.
+ * @param body - JSON body, if any.
+ *
+ * @returns The status and the parsed JSON body (`null` when empty).
+ */
+export function controlRequest(
+  controlUrl: string,
+  method: 'GET' | 'POST' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  const payload = body === undefined ? undefined : JSON.stringify(body)
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      `${controlUrl}${path}`,
+      {
+        method,
+        agent: false,
+        headers: {
+          connection: 'close',
+          ...(payload !== undefined
+            ? {
+                'content-type': 'application/json',
+                'content-length': String(Buffer.byteLength(payload)),
+              }
+            : {}),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk: Buffer) => chunks.push(chunk))
+        res.on('error', reject)
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8')
+          try {
+            resolve({ status: res.statusCode ?? 0, body: text === '' ? null : JSON.parse(text) })
+          } catch (error) {
+            reject(error)
+          }
+        })
+      },
+    )
+    req.on('error', reject)
+    req.end(payload)
+  })
 }

@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { deterministicBytes, readStream } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 
 type Intercept = (req: HttpRequest) => Promise<HttpResponse | undefined> | HttpResponse | undefined
 
 async function makeStreamClient(minimumPartSize: number, intercept: Intercept = () => undefined) {
   // Tiny simulator parts exercise the 10,000-part boundary with small fixtures.
-  const sim = new B2Simulator({ minimumPartSize })
+  const sim = await resetRemoteSimulator({ minimumPartSize })
   const inner = sim.transport()
   const seen: HttpRequest[] = []
   // URLs of requests whose response has been fully produced (a request is in
@@ -24,6 +24,7 @@ async function makeStreamClient(minimumPartSize: number, intercept: Intercept = 
     },
   }
   const client = new B2Client({
+    realm: sim.realm,
     applicationKeyId: 'k',
     applicationKey: 'k',
     transport,

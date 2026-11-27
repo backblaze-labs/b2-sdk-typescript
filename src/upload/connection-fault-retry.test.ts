@@ -4,9 +4,9 @@ import { B2SsrfError, NetworkError, UploadResponseBodyError } from '../errors/in
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { FetchTransport } from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
 import { daysFromNow, jsonErrorResponse, jsonResponse, readStream } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { RetentionMode } from '../types/lock.ts'
 import { resolveRetryUploadConnectionFaults, withFreshUploadUrlRetry } from './retry.ts'
@@ -25,7 +25,7 @@ type Failure =
   | 'part'
 
 async function harness(clientDefault?: boolean, failure: Failure = 'connection') {
-  const sim = new B2Simulator({ minimumPartSize: 4, recommendedPartSize: 4 })
+  const sim = await resetRemoteSimulator({ minimumPartSize: 4, recommendedPartSize: 4 })
   const inner = sim.transport()
   const fault = new NetworkError('connection dropped after the POST was stored')
   const stats = { files: 0, parts: 0, urls: 0, partUrls: 0, fileUrls: [] as string[] }
@@ -81,6 +81,7 @@ async function harness(clientDefault?: boolean, failure: Failure = 'connection')
     },
   }
   const client = new B2Client({
+    realm: sim.realm,
     applicationKeyId: 'test-key',
     applicationKey: 'test-key',
     transport,
@@ -371,8 +372,14 @@ describe('request timeout phases', () => {
   it.each(['headers', 'body-disabled', 'body-enabled'] as const)(
     'handles timeout during %s',
     async (phase) => {
-      const sim = new B2Simulator()
+      const sim = await resetRemoteSimulator()
       const inner = sim.transport()
+      // Under Node and Bun the simulator transport itself calls the global fetch,
+      // which the spy below replaces, so forward with the original fetch there
+      // (to the simulator's realm only). In a browser the transport proxies
+      // through Vitest commands and does not use fetch.
+      const realFetch = globalThis.fetch
+      const viaTransport = (globalThis as { window?: unknown }).window !== undefined
       let attempts = 0
       let timedOutAfterStorage = false
       const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -382,7 +389,10 @@ describe('request timeout phases', () => {
           headers: Object.fromEntries(new Headers(init?.headers)),
           body: init?.body ?? null,
         }
-        const response = await inner.send(request)
+        if (new URL(request.url).origin !== sim.realm) {
+          throw new Error(`unexpected request outside the simulator realm: ${request.url}`)
+        }
+        const response = viaTransport ? await inner.send(request) : await realFetch(input, init)
         if (request.url.includes('b2_upload_file?') && ++attempts === 1) {
           if (phase === 'headers') {
             return new Promise<Response>((_resolve, reject) => {
@@ -413,6 +423,7 @@ describe('request timeout phases', () => {
       })
       try {
         const client = new B2Client({
+          realm: sim.realm,
           applicationKeyId: 'test-key',
           applicationKey: 'test-key',
           // Simulator URLs are localhost; every fetch in this fixture is mocked.

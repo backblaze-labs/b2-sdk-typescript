@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BufferSource } from '../streams/source.ts'
-import { deterministicBytes, makeClient } from '../test-utils/index.ts'
+import { deterministicBytes } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { copyLargeFile } from './large.ts'
 
@@ -11,7 +12,7 @@ describe('multipart copy metadata', () => {
     ['uses an explicitly empty replacement fileInfo', {}],
   ] as const)('%s', async (_name, replacement) => {
     // Small simulator parts exercise multipart behavior without multi-MB fixtures.
-    const { client } = makeClient({ minimumPartSize: 100_000 })
+    const { client } = await makeRemoteClient({ minimumPartSize: 100_000 })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'copy-metadata',
@@ -48,7 +49,7 @@ describe('multipart copy metadata', () => {
   })
 
   it('preserves source fileInfo on a small copy with only a contentType override', async () => {
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'copy-small-metadata',

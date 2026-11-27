@@ -5,9 +5,9 @@ import { B2Client } from '../client.ts'
 import { NetworkError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import type { RawClient } from '../raw/index.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
 import { deterministicBytes } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
@@ -15,10 +15,35 @@ import { finishLargeFileWithAbortReconciliation } from './finish.ts'
 import { uploadLargeFile } from './large.ts'
 import { uploadPartWithFreshUrl } from './retry.ts'
 
+/**
+ * Reads a response body once and returns a copy whose body can be read again.
+ * The standalone simulator answers over real HTTP, whose bodies are readable
+ * only once, so a recording transport that peeks at a response must buffer it
+ * before handing it on to the SDK.
+ *
+ * @param resp - The response from the inner transport.
+ *
+ * @returns A response with the same status, headers and body bytes.
+ */
+async function bufferBody(resp: HttpResponse): Promise<HttpResponse> {
+  const bytes = new Uint8Array(await resp.arrayBuffer())
+  const text = new TextDecoder().decode(bytes)
+  return {
+    status: resp.status,
+    headers: resp.headers,
+    get body() {
+      return new Response(bytes.slice()).body
+    },
+    json: async <T>() => JSON.parse(text) as T,
+    text: async () => text,
+    arrayBuffer: async () => bytes.slice().buffer as ArrayBuffer,
+  }
+}
+
 describe('part upload URL pool cleanup', () => {
   it('part-upload URLs for a finished large file are not retained in the account pool', async () => {
     // A reduced simulator part size exercises multipart upload with small fixtures.
-    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
     // The pool is keyed by the large-file id issued by b2_start_large_file. The simulator
     // gives the finished file a different id, so read the key off the start request itself
     // instead of the returned FileVersion or any internal check-in call.
@@ -28,12 +53,15 @@ describe('part upload URL pool cleanup', () => {
       async send(req: HttpRequest): Promise<HttpResponse> {
         const resp = await inner.send(req)
         if (req.url.includes('b2_start_large_file')) {
-          startedFileId = ((await resp.json()) as { fileId: string }).fileId
+          const buffered = await bufferBody(resp)
+          startedFileId = ((await buffered.json()) as { fileId: string }).fileId
+          return buffered
         }
         return resp
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport,
@@ -65,7 +93,7 @@ describe('part upload URL pool cleanup', () => {
     'handles part URLs after cancellation success=%s without clearing other files',
     async (cancelSucceeds) => {
       // A reduced simulator part size exercises multipart upload with small fixtures.
-      const sim = new B2Simulator({ minimumPartSize: 100_000 })
+      const sim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
       const inner = sim.transport()
       let startedFileId: string | undefined
       let cancelled = 0
@@ -87,13 +115,16 @@ describe('part upload URL pool cleanup', () => {
           }
           const resp = await inner.send(req)
           if (req.url.includes('b2_start_large_file')) {
-            startedFileId = ((await resp.json()) as { fileId: string }).fileId
+            const buffered = await bufferBody(resp)
+            startedFileId = ((await buffered.json()) as { fileId: string }).fileId
+            return buffered
           }
           if (req.url.includes('b2_cancel_large_file') && resp.status === 200) cancelled++
           return resp
         },
       }
       const client = new B2Client({
+        realm: sim.realm,
         applicationKeyId: 'test-key-id',
         applicationKey: 'test-key',
         transport,
@@ -248,8 +279,9 @@ describe('part upload URL pool cleanup', () => {
   )
 
   it('clears pooled URLs when a caller cancels a large file through the bucket', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: sim.transport(),
@@ -277,8 +309,9 @@ describe('part upload URL pool cleanup', () => {
   })
 
   it('keeps part URLs when the finish outcome is ambiguous', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: sim.transport(),
