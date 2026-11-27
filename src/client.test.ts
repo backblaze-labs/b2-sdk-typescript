@@ -54,7 +54,7 @@ describe('B2Client with simulator', () => {
   it('collapses concurrent expired-token reauthorization into one authorize call', async () => {
     // Stays on the embedded simulator: over real HTTP a stale-token 401 can
     // arrive after the refresh settled, and ReauthCoalescer then starts a second
-    // authorize. Move it once that SDK behavior is fixed.
+    // authorize. Move it once that SDK behavior is fixed (issue #466).
     const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
     const inner = sim.transport()
     let authorizeCount = 0
@@ -179,7 +179,7 @@ describe('B2Client with simulator', () => {
   it('lets late storage requests join in-flight reauthorization', async () => {
     // Stays on the embedded simulator: over real HTTP a stale-token 401 can
     // arrive after the refresh settled, and ReauthCoalescer then starts a second
-    // authorize. Move it once that SDK behavior is fixed.
+    // authorize. Move it once that SDK behavior is fixed (issue #466).
     const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
     const inner = sim.transport()
     let authorizeCount = 0
