@@ -23,14 +23,17 @@ function thresholdGlobs(config) {
   }
 }
 
-function coveredSources() {
-  const excluded = picomatch([
-    'src/**/*.test.ts',
-    'src/version.ts',
-    'src/auth/account-info.ts',
-    'src/sync/types.ts',
-    'src/test-utils/**',
-  ])
+// The coverage `exclude` list, read from the config so the two cannot drift.
+function coverageExcludes(config) {
+  const coverage = config.slice(config.indexOf('coverage: {'))
+  const list = coverage.match(/\bexclude:\s*\[([\s\S]*?)\]/)?.[1] ?? ''
+  const globs = [...list.replace(/\/\/.*$/gm, '').matchAll(/'([^']+)'/g)].map((m) => m[1])
+  assert.ok(globs.includes('src/test-utils/**'), 'coverage exclude list not found')
+  return globs
+}
+
+function coveredSources(config) {
+  const excluded = picomatch(coverageExcludes(config))
   return readdirSync(join(repo, 'src'), { recursive: true })
     .map((file) =>
       relative(repo, join(repo, 'src', file))
@@ -65,7 +68,7 @@ const config = readFileSync(join(repo, 'vitest.coverage.config.ts'), 'utf8').rep
   '\r\n',
   '\n',
 )
-const files = coveredSources()
+const files = coveredSources(config)
 
 test('every covered source file is in exactly one coverage gate', () => {
   assert.ok(files.includes('src/client.ts'))
