@@ -1,10 +1,18 @@
 /**
  * Node `--import` preload for example-program tests.
  *
- * Starts an in-memory B2Simulator (from the built `dist/`), seeds it from the
- * JSON in `EXAMPLE_SIM_SEED`, and routes `globalThis.fetch` into the simulator
- * transport so an unmodified example (which builds its own default
- * `B2Client`) runs offline with no credentials.
+ * Routes `globalThis.fetch` to the standalone b2-simulator
+ * (https://github.com/backblaze-labs/b2-simulator) that the parent test
+ * started and reset, seeds it from the JSON in `EXAMPLE_SIM_SEED`, so an
+ * unmodified example (which builds its own default `B2Client`) runs offline
+ * with no credentials. The parent passes the server's origins in
+ * `B2SIM_API_URL` and `B2SIM_CONTROL_URL` (`resetRemoteSimulator()` from
+ * `src/test-utils/remote-simulator.ts` gives both).
+ *
+ * Every request goes to the simulator, whatever host the example used, so
+ * nothing reaches the network. The simulator hands out URLs on its loopback
+ * `http` origin, which the SDK's default SSRF guard rejects; they are
+ * presented as a Backblaze pod host and mapped back on the way in.
  *
  * Seed shape:
  *   { buckets: [{ name, files: [{ name, text?, base64?, fileInfo? }] }],
@@ -19,25 +27,30 @@
 import { appendFileSync } from 'node:fs'
 
 const fromSource = process.env.EXAMPLE_SIM_SOURCE === '1'
-const { B2Client, BucketType } = await import(
+const { B2Client, BucketType, FetchTransport } = await import(
   fromSource ? '../../../src/index.ts' : '../../../dist/index.js'
-)
-const { B2Simulator } = await import(
-  fromSource ? '../../../src/simulator/index.ts' : '../../../dist/simulator/index.js'
 )
 const { BufferSource } = await import(
   fromSource ? '../../../src/streams/index.ts' : '../../../dist/streams/index.js'
 )
 
+const SIM_ORIGIN = process.env.B2SIM_API_URL
+const CONTROL_URL = process.env.B2SIM_CONTROL_URL
+if (SIM_ORIGIN === undefined || CONTROL_URL === undefined) {
+  throw new Error(
+    'fetch-simulator-preload: set B2SIM_API_URL and B2SIM_CONTROL_URL to a running standalone b2-simulator (resetRemoteSimulator() in the parent test)',
+  )
+}
+const simFetch = globalThis.fetch
+
 const uploadTrace = process.env.EXAMPLE_SIM_UPLOAD_TRACE
 const seed = JSON.parse(process.env.EXAMPLE_SIM_SEED ?? '{}')
-const sim = new B2Simulator()
-const transport = sim.transport()
 
 const setup = new B2Client({
   applicationKeyId: 'seed-key',
   applicationKey: 'seed-secret',
-  transport,
+  realm: SIM_ORIGIN,
+  transport: new FetchTransport(),
 })
 await setup.authorize()
 for (const spec of seed.buckets ?? []) {
@@ -58,34 +71,25 @@ for (const spec of seed.buckets ?? []) {
   }
 }
 if (seed.failUploads === true) {
-  sim.injectFailure({
-    on: 'b2_upload_file',
-    status: 400,
-    code: 'bad_request',
-    message: 'simulated upload failure',
+  const response = await simFetch(`${CONTROL_URL}/faults`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      on: 'b2_upload_file',
+      status: 400,
+      code: 'bad_request',
+      message: 'simulated upload failure',
+    }),
   })
-}
-
-// fetch hands us a Headers object (lower-cased keys); the simulator reads the
-// canonical B2 spellings (`Authorization`, `X-Bz-File-Name`, ...).
-function canonicalHeaders(headers) {
-  const out = {}
-  for (const [key, value] of new Headers(headers).entries()) {
-    const name = key.replace(/(^|-)([a-z])/g, (_m, dash, ch) => dash + ch.toUpperCase())
-    out[name] = value
+  if (response.status !== 200) {
+    throw new Error(`fetch-simulator-preload: POST /faults answered ${response.status}`)
   }
-  return out
 }
 
-// The simulator hands out upload URLs on http://localhost:0, which the SDK's
-// default SSRF guard rejects. Present them as a Backblaze pod host and map
-// them back when the request reaches the simulator.
-const SIM_UPLOAD_ORIGIN = 'http://localhost:0'
 const POD_ORIGIN = 'https://pod-000-0000-00.backblaze.com'
 
 globalThis.fetch = async (input, init = {}) => {
   const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-  // Compare the parsed origin exactly (not a string prefix) so only the pod host is remapped.
   const parsed = new URL(rawUrl)
   if (
     process.env.EXAMPLE_SIM_MANIFEST_FAILURE === '1' &&
@@ -99,17 +103,13 @@ globalThis.fetch = async (input, init = {}) => {
       },
     )
   }
-  const url =
-    parsed.origin === POD_ORIGIN ? SIM_UPLOAD_ORIGIN + parsed.pathname + parsed.search : rawUrl
-  const response = await transport.send({
-    url,
-    method: init.method ?? 'GET',
-    ...(init.headers !== undefined ? { headers: canonicalHeaders(init.headers) } : {}),
-    ...(init.body !== undefined && init.body !== null ? { body: init.body } : {}),
-    ...(init.signal !== undefined ? { signal: init.signal } : {}),
-  })
-  if (uploadTrace !== undefined && url.includes('b2_upload_file')) {
-    const encodedName = canonicalHeaders(init.headers ?? {})['X-Bz-File-Name'] ?? ''
+  const url = SIM_ORIGIN + parsed.pathname + parsed.search
+  const response =
+    typeof input === 'string' || input instanceof URL
+      ? await simFetch(url, init)
+      : await simFetch(new Request(url, input), init)
+  if (uploadTrace !== undefined && parsed.pathname.includes('b2_upload_file')) {
+    const encodedName = new Headers(init.headers).get('x-bz-file-name') ?? ''
     appendFileSync(
       uploadTrace,
       `${JSON.stringify({ fileName: decodeURIComponent(encodedName), status: response.status })}\n`,
@@ -117,16 +117,15 @@ globalThis.fetch = async (input, init = {}) => {
   }
   const nullBody = response.status === 204 || response.status === 304
   if (!nullBody && (response.headers.get('content-type') ?? '').includes('application/json')) {
-    let text = (await response.text()).replaceAll(SIM_UPLOAD_ORIGIN, POD_ORIGIN)
-    if (url.includes('b2_authorize_account') && process.env.EXAMPLE_SIM_API_URL) {
+    let text = (await response.text()).replaceAll(SIM_ORIGIN, POD_ORIGIN)
+    if (parsed.pathname.includes('b2_authorize_account') && process.env.EXAMPLE_SIM_API_URL) {
       const auth = JSON.parse(text)
       auth.apiInfo.storageApi.apiUrl = process.env.EXAMPLE_SIM_API_URL
       text = JSON.stringify(auth)
     }
-    return new Response(text, { status: response.status, headers: response.headers })
+    const headers = new Headers(response.headers)
+    headers.delete('content-length')
+    return new Response(text, { status: response.status, headers })
   }
-  return new Response(nullBody ? null : response.body, {
-    status: response.status,
-    headers: response.headers,
-  })
+  return response
 }

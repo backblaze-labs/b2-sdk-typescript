@@ -1,14 +1,26 @@
 // Persists simulator uploads across CLI processes for backup and restore tests.
+// Each process gets an empty standalone b2-simulator (reset by the parent test,
+// which passes its origins in B2SIM_API_URL / B2SIM_CONTROL_URL); the uploads
+// recorded in REVIEW_STATE are replayed into it first.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { B2Client, BucketType } from '../../src/index.ts'
-import { B2Simulator } from '../../src/simulator/index.ts'
+import { B2Client, BucketType, FetchTransport } from '../../src/index.ts'
 import { BufferSource } from '../../src/streams/index.ts'
 
+const simOrigin = process.env.B2SIM_API_URL
+if (simOrigin === undefined) {
+  throw new Error(
+    'backup-state-preload: set B2SIM_API_URL to a running standalone b2-simulator (resetRemoteSimulator() in the parent test)',
+  )
+}
+const simFetch = globalThis.fetch
 const statePath = process.env.REVIEW_STATE
 const entries = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : []
-const sim = new B2Simulator()
-const transport = sim.transport()
-const setup = new B2Client({ applicationKeyId: 'test', applicationKey: 'test', transport })
+const setup = new B2Client({
+  applicationKeyId: 'test',
+  applicationKey: 'test',
+  realm: simOrigin,
+  transport: new FetchTransport(),
+})
 await setup.authorize()
 const bucket = await setup.createBucket({
   bucketName: 'review-bucket',
@@ -21,56 +33,49 @@ for (const item of entries) {
     fileInfo: item.info,
   })
 }
-function canonical(headers) {
-  const out = {}
-  for (const [key, value] of new Headers(headers).entries())
-    out[key.replace(/(^|-)([a-z])/g, (_m, dash, ch) => dash + ch.toUpperCase())] = value
-  return out
-}
-const localOrigin = 'http://localhost:0'
 const podOrigin = 'https://pod-000-0000-00.backblaze.com'
 globalThis.fetch = async (input, init = {}) => {
   const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   const parsed = new URL(raw)
-  const url = parsed.origin === podOrigin ? localOrigin + parsed.pathname + parsed.search : raw
-  const headers = canonical(init.headers ?? {})
-  if (
-    url.includes('b2_upload_file') &&
-    process.env.REVIEW_FAIL_FILE === decodeURIComponent(headers['X-Bz-File-Name'] ?? '')
-  ) {
+  // Every request goes to the simulator, whatever host the example used.
+  const url = simOrigin + parsed.pathname + parsed.search
+  const headers = new Headers(init.headers)
+  const isUpload = parsed.pathname.includes('b2_upload_file')
+  const fileName = decodeURIComponent(headers.get('x-bz-file-name') ?? '')
+  if (isUpload && process.env.REVIEW_FAIL_FILE === fileName) {
     return new Response(
       JSON.stringify({ status: 400, code: 'bad_request', message: 'simulated upload failure' }),
       { status: 400, headers: { 'Content-Type': 'application/json' } },
     )
   }
   let body = init.body
-  if (url.includes('b2_upload_file')) body = new Uint8Array(await new Response(body).arrayBuffer())
-  const response = await transport.send({
-    url,
-    method: init.method ?? 'GET',
-    headers,
+  if (isUpload) body = new Uint8Array(await new Response(body).arrayBuffer())
+  const { duplex: _duplex, ...rest } = init
+  const response = await simFetch(url, {
+    ...rest,
     ...(body != null ? { body } : {}),
-    ...(init.signal ? { signal: init.signal } : {}),
+    ...(body instanceof ReadableStream ? { duplex: 'half' } : {}),
   })
-  if (url.includes('b2_upload_file') && response.status === 200) {
+  if (isUpload && response.status === 200) {
     const info = {}
-    for (const [key, value] of new Headers(init.headers).entries())
+    for (const [key, value] of headers.entries())
       if (key.startsWith('x-bz-info-')) info[key.slice(10)] = decodeURIComponent(value)
-    const name = decodeURIComponent(headers['X-Bz-File-Name'])
-    const index = entries.findIndex((item) => item.name === name)
-    const item = { name, base64: Buffer.from(body).toString('base64'), info }
+    const index = entries.findIndex((item) => item.name === fileName)
+    const item = { name: fileName, base64: Buffer.from(body).toString('base64'), info }
     if (index < 0) entries.push(item)
     else entries[index] = item
     writeFileSync(statePath, JSON.stringify(entries))
   }
   if ((response.headers.get('content-type') ?? '').includes('application/json')) {
-    let data = (await response.text()).replaceAll(localOrigin, podOrigin)
-    if (url.includes('b2_authorize_account') && process.env.REVIEW_API_HOST) {
+    let data = (await response.text()).replaceAll(simOrigin, podOrigin)
+    if (parsed.pathname.includes('b2_authorize_account') && process.env.REVIEW_API_HOST) {
       const auth = JSON.parse(data)
       auth.apiInfo.storageApi.apiUrl = process.env.REVIEW_API_HOST
       data = JSON.stringify(auth)
     }
-    return new Response(data, { status: response.status, headers: response.headers })
+    const out = new Headers(response.headers)
+    out.delete('content-length')
+    return new Response(data, { status: response.status, headers: out })
   }
-  return new Response(response.body, { status: response.status, headers: response.headers })
+  return response
 }

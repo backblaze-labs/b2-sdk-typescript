@@ -29,7 +29,8 @@ compiling against the current API.
    left.
 
 The example-program tests depend on `helpers/fetch-simulator-preload.mjs`, which
-routes `fetch` into the in-memory simulator so an unmodified example runs
+routes `fetch` to the standalone b2-simulator the test started (its origins in
+`B2SIM_API_URL` and `B2SIM_CONTROL_URL`) so an unmodified example runs
 offline. Several tests pin implementation details beyond the defect itself (for
 example exact message text or the HTTP status used); adjust them with the fix if
 the corrected behaviour is legitimately different.

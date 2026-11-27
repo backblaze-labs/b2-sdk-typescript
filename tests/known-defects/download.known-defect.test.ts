@@ -6,13 +6,14 @@ import { describe, expect, it } from 'vitest'
 import { B2Client } from '../../src/client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../../src/http/transport.ts'
 import { BufferSource } from '../../src/streams/source.ts'
-import { deterministicBytes, makeClient, readStream } from '../../src/test-utils/index.ts'
+import { deterministicBytes, readStream } from '../../src/test-utils/index.ts'
+import { makeRemoteClient } from '../../src/test-utils/remote-simulator.ts'
 import { BucketType } from '../../src/types/bucket.ts'
 
 describe('parallel download known defects', () => {
   it('a connection reset mid-body on one range must not abort the download by default', async () => {
     const data = deterministicBytes(100)
-    const { sim } = makeClient()
+    const { sim } = await makeRemoteClient()
     const ranges: string[] = []
     const inner = sim.transport()
     const flaky: HttpTransport = {
@@ -53,6 +54,7 @@ describe('parallel download known defects', () => {
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: flaky,
     })
     await client.authorize()
