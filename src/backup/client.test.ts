@@ -6,13 +6,13 @@ import {
 } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import {
   deferred,
   jsonErrorResponse,
   jsonResponse,
   recordingTransport,
 } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import type { ComputerBackup } from '../types/backup.ts'
 import { accountId, computerId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability } from '../types/partner.ts'
@@ -22,13 +22,13 @@ function apiEndpointName(request: HttpRequest): string {
   return new URL(request.url).pathname.split('/').at(-1) ?? ''
 }
 
-function makeBackupClient(options?: {
+async function makeBackupClient(options?: {
   readonly client?: Partial<Omit<BackupClientOptions, 'masterKeyId' | 'masterKey' | 'transport'>>
-}): {
+}): Promise<{
   readonly client: BackupClient
   readonly seenRequests: HttpRequest[]
-} {
-  const sim = new B2Simulator({ partnerAuthorize: true })
+}> {
+  const sim = await resetRemoteSimulator({ partnerAuthorize: true })
   const inner = sim.transport()
   const seenRequests: HttpRequest[] = []
   const transport: HttpTransport = {
@@ -41,6 +41,10 @@ function makeBackupClient(options?: {
     client: new BackupClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
+      // The standalone simulator's realm is a loopback http origin, which the
+      // Partner authorizer accepts only as an explicitly allowed custom realm.
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       transport,
       retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
       ...(options?.client ?? {}),
@@ -51,30 +55,32 @@ function makeBackupClient(options?: {
 
 function partnerAuthorizeResponse(
   token: string,
-  options: { readonly includeBackupApi?: boolean } = {},
+  options: { readonly includeBackupApi?: boolean; readonly origin?: string } = {},
 ): PartnerAuthorizeResponse {
   const includeBackupApi = options.includeBackupApi ?? true
+  const groupsApiUrl = `${options.origin ?? 'https://groups.backblazeb2.com'}/partner`
+  const backupApiUrl = `${options.origin ?? 'https://backup.backblazeb2.com'}/backup`
   return {
     accountId: accountId('partner-account'),
     authorizationToken: partnerToken(token),
     apiInfo: {
       groupsApi: {
-        groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+        groupsApiUrl,
         capabilities: [PartnerCapability.All],
         infoType: 'groupsApi',
       },
       ...(includeBackupApi
         ? {
             backupApi: {
-              backupApiUrl: 'https://backup.backblazeb2.com/backup',
+              backupApiUrl,
               capabilities: [PartnerCapability.All],
               infoType: 'backupApi' as const,
             },
           }
         : {}),
     },
-    groupsApiUrl: 'https://groups.backblazeb2.com/partner',
-    ...(includeBackupApi ? { backupApiUrl: 'https://backup.backblazeb2.com/backup' } : {}),
+    groupsApiUrl,
+    ...(includeBackupApi ? { backupApiUrl } : {}),
     groupsCapabilities: [PartnerCapability.All],
     ...(includeBackupApi ? { backupCapabilities: [PartnerCapability.All] } : {}),
     applicationKeyExpirationTimestamp: null,
@@ -112,7 +118,7 @@ function inMemoryJsonResponse<T>(data: T): HttpResponse {
 
 describe('BackupClient facade', () => {
   it('authorizes, lists, paginates, and deletes simulator backup computers', async () => {
-    const { client, seenRequests } = makeBackupClient()
+    const { client, seenRequests } = await makeBackupClient()
 
     const auth = await client.authorize()
     const firstPage = await client.listComputers({ pageSize: 1 })
@@ -148,9 +154,13 @@ describe('BackupClient facade', () => {
   })
 
   it('uses cached Partner authorization state without a fresh authorize call', async () => {
+    const sim = await resetRemoteSimulator()
     const partnerAccountInfo = new InMemoryPartnerAccountInfo()
-    partnerAccountInfo.setAuth(partnerAuthorizeResponse('cached-partner-token'))
-    const sim = new B2Simulator()
+    // The cached endpoints are on the simulator's origin, as a cache filled by
+    // authorizing against it would hold.
+    partnerAccountInfo.setAuth(
+      partnerAuthorizeResponse('cached-partner-token', { origin: sim.realm }),
+    )
     const inner = sim.transport()
     const seenRequests: HttpRequest[] = []
     const transport: HttpTransport = {
@@ -162,6 +172,8 @@ describe('BackupClient facade', () => {
     const client = new BackupClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       transport,
       retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
       partnerAccountInfo,
@@ -525,7 +537,7 @@ describe('BackupClient facade', () => {
   })
 
   it('redacts Master Application Key credentials and Partner tokens in diagnostics', async () => {
-    const { client } = makeBackupClient()
+    const { client } = await makeBackupClient()
 
     expect(JSON.stringify(client)).toContain('[unauthorized]')
     expect(client.toString()).toBe('[BackupClient [redacted Master Application Key]]')

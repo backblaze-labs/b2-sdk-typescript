@@ -15,8 +15,9 @@ import {
   TooManyMembersError,
 } from '../errors/index.ts'
 import type { HttpRequest, HttpTransport } from '../http/transport.ts'
-import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
+import type { B2SimulatorOptions } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse } from '../test-utils/index.ts'
+import { type RemoteSimulator, resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { accountId, applicationKeyId, groupId, partnerToken } from '../types/ids.ts'
 import {
   type ListedGroupMember,
@@ -39,15 +40,15 @@ function apiEndpointName(request: HttpRequest): string {
   return new URL(request.url).pathname.split('/').at(-1) ?? ''
 }
 
-function makeRecordingPartnerClient(options?: {
+async function makeRecordingPartnerClient(options?: {
   readonly sim?: B2SimulatorOptions
   readonly client?: Partial<Omit<PartnerClientOptions, 'masterKeyId' | 'masterKey' | 'transport'>>
-}): {
+}): Promise<{
   readonly client: PartnerClient
-  readonly sim: B2Simulator
+  readonly sim: RemoteSimulator
   readonly seenRequests: HttpRequest[]
-} {
-  const sim = new B2Simulator({ partnerAuthorize: true, ...(options?.sim ?? {}) })
+}> {
+  const sim = await resetRemoteSimulator({ partnerAuthorize: true, ...(options?.sim ?? {}) })
   const inner = sim.transport()
   const seenRequests: HttpRequest[] = []
   const transport: HttpTransport = {
@@ -60,6 +61,10 @@ function makeRecordingPartnerClient(options?: {
     client: new PartnerClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
+      // The standalone simulator's realm is a loopback http origin, which the
+      // Partner client accepts only as an explicitly allowed custom realm.
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       transport,
       retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
       ...(options?.client ?? {}),
@@ -149,7 +154,7 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 
 describe('PartnerClient facade', () => {
   it('authorizes and reads Partner API coordinates from PartnerAccountInfo', async () => {
-    const { client, seenRequests } = makeRecordingPartnerClient()
+    const { client, seenRequests } = await makeRecordingPartnerClient()
 
     const auth = await client.authorize()
     const page = await client.listGroups({ pageSize: 1 })
@@ -170,7 +175,7 @@ describe('PartnerClient facade', () => {
   })
 
   it('reuses Partner auth populated in a shared store after construction', async () => {
-    const sim = new B2Simulator({ partnerAuthorize: true })
+    const sim = await resetRemoteSimulator({ partnerAuthorize: true })
     const inner = sim.transport()
     const seenRequests: HttpRequest[] = []
     const transport: HttpTransport = {
@@ -183,6 +188,8 @@ describe('PartnerClient facade', () => {
     const partner = new PartnerClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       partnerAccountInfo,
       transport,
       retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
@@ -190,6 +197,8 @@ describe('PartnerClient facade', () => {
     const backup = new BackupClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       partnerAccountInfo,
       transport,
       retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
@@ -278,7 +287,7 @@ describe('PartnerClient facade', () => {
   })
 
   it('paginates groups and group members through the simulator', async () => {
-    const { client } = makeRecordingPartnerClient()
+    const { client } = await makeRecordingPartnerClient()
     await client.authorize()
 
     const groups: PartnerGroup[] = []
@@ -346,11 +355,11 @@ describe('PartnerClient facade', () => {
   })
 
   it('authorizes and calls Partner endpoints for loopback HTTP custom realms', async () => {
-    const sim = new B2Simulator({ partnerAuthorize: true })
+    const sim = await resetRemoteSimulator({ partnerAuthorize: true })
     const client = new PartnerClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
-      realm: 'http://127.0.0.1:12345',
+      realm: sim.realm,
       allowCustomAuthorizeRealm: true,
       disableSsrfGuard: true,
       transport: sim.transport(),
@@ -360,12 +369,12 @@ describe('PartnerClient facade', () => {
     const auth = await client.authorize()
     const page = await client.listGroups({ pageSize: 1 })
 
-    expect(auth.groupsApiUrl).toBe('http://127.0.0.1:12345/partner')
+    expect(auth.groupsApiUrl).toBe(`${sim.realm}/partner`)
     expect(page.groups).toHaveLength(1)
   })
 
   it('passes documented null member options through to the raw layer', async () => {
-    const { client } = makeRecordingPartnerClient()
+    const { client } = await makeRecordingPartnerClient()
     await client.authorize()
     const group = groupId('group-id')
     const memberAccountId = accountId('member-account')
@@ -406,7 +415,7 @@ describe('PartnerClient facade', () => {
   })
 
   it('reserves a trial account with a single-object wire body through the simulator', async () => {
-    const { client, seenRequests } = makeRecordingPartnerClient()
+    const { client, seenRequests } = await makeRecordingPartnerClient()
     const controller = new AbortController()
     await client.authorize()
 
@@ -800,7 +809,7 @@ describe('PartnerClient facade', () => {
   )
 
   it('does not reauthorize for simulator partner validation 401 responses', async () => {
-    const { client, seenRequests } = makeRecordingPartnerClient()
+    const { client, seenRequests } = await makeRecordingPartnerClient()
     await client.authorize()
 
     await expect(client.listGroups({ startGroupId: groupId('missing-group') })).rejects.toThrow(

@@ -24,6 +24,7 @@ import {
 import { UrlGuard } from '../http/url-guard.ts'
 import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
+import { type RemoteSimulator, resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { Capability } from '../types/auth.ts'
 import type { PartnerToken } from '../types/ids.ts'
 import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '../types/ids.ts'
@@ -147,7 +148,7 @@ function makePartnerEndpointRawClient(responses: Readonly<Record<string, unknown
   return { raw: new PartnerRawClient({ transport }), seenRequests, urlGuard }
 }
 
-function makeRecordingSimulatorTransport(sim: B2Simulator): {
+function makeRecordingSimulatorTransport(sim: RemoteSimulator): {
   readonly transport: HttpTransport
   readonly seenRequests: HttpRequest[]
 } {
@@ -166,22 +167,25 @@ function makeRecordingSimulatorTransport(sim: B2Simulator): {
 
 async function makeSimulatorPartnerRawClient(options?: B2SimulatorOptions): Promise<{
   readonly raw: PartnerRawClient
-  readonly sim: B2Simulator
+  readonly sim: RemoteSimulator
   readonly seenRequests: HttpRequest[]
   readonly groupsApiUrl: string
   readonly authToken: PartnerToken
   readonly adminAccountId: ReturnType<typeof accountId>
 }> {
-  const sim = new B2Simulator({ ...options, partnerAuthorize: true })
+  const sim = await resetRemoteSimulator({ ...options, partnerAuthorize: true })
   const { seenRequests, transport } = makeRecordingSimulatorTransport(sim)
   const raw = new PartnerRawClient({
+    // The standalone simulator's realm is a loopback http origin, which the
+    // Partner client accepts only as an explicitly allowed custom realm.
+    allowCustomAuthorizeRealm: true,
     transport: new RetryTransport({
       transport,
       retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
       sleepImpl: noSleep,
     }),
   })
-  const auth = await raw.authorizePartner('master-key-id', 'master-key')
+  const auth = await raw.authorizePartner('master-key-id', 'master-key', sim.realm)
   if (auth.groupsApiUrl === undefined) throw new Error('expected simulator Partner API URL')
   return {
     raw,
@@ -191,6 +195,27 @@ async function makeSimulatorPartnerRawClient(options?: B2SimulatorOptions): Prom
     authToken: auth.authorizationToken,
     adminAccountId: auth.accountId,
   }
+}
+
+/**
+ * The embedded-simulator version of {@link makeSimulatorPartnerRawClient}, for
+ * the cases that real HTTP cannot carry.
+ */
+async function makeEmbeddedSimulatorPartnerRawClient(): Promise<{
+  readonly raw: PartnerRawClient
+  readonly groupsApiUrl: string
+}> {
+  const sim = new B2Simulator({ partnerAuthorize: true })
+  const raw = new PartnerRawClient({
+    transport: new RetryTransport({
+      transport: sim.transport(),
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+      sleepImpl: noSleep,
+    }),
+  })
+  const auth = await raw.authorizePartner('master-key-id', 'master-key')
+  if (auth.groupsApiUrl === undefined) throw new Error('expected simulator Partner API URL')
+  return { raw, groupsApiUrl: auth.groupsApiUrl }
 }
 
 function noSleep(): Promise<void> {
@@ -1208,6 +1233,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     const client = new B2Client({
       applicationKeyId: trial.applicationKeyId,
       applicationKey: trial.applicationKey,
+      realm: sim.realm,
       transport: sim.transport(),
     })
     const auth = await client.authorize()
@@ -1427,34 +1453,56 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       403,
       'access_denied',
     ],
-    ['leading whitespace Authorization header', ' 000', AccessDeniedError, 403, 'access_denied'],
-    ['trailing whitespace Authorization header', '000 ', AccessDeniedError, 403, 'access_denied'],
     ['interior whitespace Authorization header', '0 0 0', AccessDeniedError, 403, 'access_denied'],
     ['invalid token', '000', BadAuthTokenError, 401, 'unauthorized'],
   ])(
     'surfaces the documented reserve trial auth error path: %s',
     async (_label, token, errorClass, status, code) => {
       const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient()
-
-      await expect(
-        raw.reserveTrialCreateAccount(groupsApiUrl, token, {
-          email: 'trial-auth@example.com',
-          term: 7,
-          storage: 1,
-        }),
-      ).rejects.toMatchObject({
-        code,
-        status,
-      })
-      await expect(
-        raw.reserveTrialCreateAccount(groupsApiUrl, token, {
-          email: 'trial-auth-2@example.com',
-          term: 7,
-          storage: 1,
-        }),
-      ).rejects.toThrow(errorClass)
+      await expectReserveTrialAuthError(raw, groupsApiUrl, token, errorClass, status, code)
     },
   )
+
+  // Stays on the embedded simulator: HTTP strips leading and trailing
+  // whitespace from a header value (RFC 9110, section 5.5), so over real HTTP
+  // these tokens reach the server as '000', the invalid-token case above.
+  it.each([
+    ['leading whitespace Authorization header', ' 000', AccessDeniedError, 403, 'access_denied'],
+    ['trailing whitespace Authorization header', '000 ', AccessDeniedError, 403, 'access_denied'],
+  ])(
+    'surfaces the documented reserve trial auth error path: %s',
+    async (_label, token, errorClass, status, code) => {
+      const { raw, groupsApiUrl } = await makeEmbeddedSimulatorPartnerRawClient()
+      await expectReserveTrialAuthError(raw, groupsApiUrl, token, errorClass, status, code)
+    },
+  )
+
+  async function expectReserveTrialAuthError(
+    raw: PartnerRawClient,
+    groupsApiUrl: string,
+    token: string,
+    errorClass: new (...args: never[]) => Error,
+    status: number,
+    code: string,
+  ): Promise<void> {
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, token, {
+        email: 'trial-auth@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toMatchObject({
+      code,
+      status,
+    })
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, token, {
+        email: 'trial-auth-2@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow(errorClass)
+  }
 
   it('rejects non-issued Partner tokens in strict simulator mode', async () => {
     const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient({ strictAuth: true })
@@ -1487,11 +1535,11 @@ describe('PartnerRawClient reserve trial endpoint', () => {
   ] satisfies readonly (readonly [string, Record<string, string> | undefined])[])(
     'does not mint simulator Partner tokens with %s authorize credentials',
     async (_label, headers) => {
-      const sim = new B2Simulator({ partnerAuthorize: true })
+      const sim = await resetRemoteSimulator({ partnerAuthorize: true })
       const transport = sim.transport()
 
       const authResponse = await transport.send({
-        url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+        url: `${sim.realm}/b2api/v3/b2_authorize_account`,
         method: 'GET',
         ...(headers !== undefined ? { headers } : {}),
       })
@@ -1500,7 +1548,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       expect(authBody.authorizationToken).toBeUndefined()
 
       const reserveResponse = await transport.send({
-        url: 'http://localhost:0/partner/b2api/v4/b2_reserve_trial_create_account',
+        url: `${sim.realm}/partner/b2api/v4/b2_reserve_trial_create_account`,
         method: 'POST',
         headers: {
           Authorization: authBody.authorizationToken ?? '',
@@ -1515,10 +1563,10 @@ describe('PartnerRawClient reserve trial endpoint', () => {
   )
 
   it('does not mint simulator Partner tokens for a known application key secret mismatch', async () => {
-    const sim = new B2Simulator({ partnerAuthorize: true })
+    const sim = await resetRemoteSimulator({ partnerAuthorize: true })
     const transport = sim.transport()
     const keyResponse = await transport.send({
-      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      url: `${sim.realm}/b2api/v4/b2_create_key`,
       method: 'POST',
       headers: {
         Authorization: 'sim-auth-token',
@@ -1533,7 +1581,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     const key = (await keyResponse.json()) as { applicationKeyId: string }
 
     const authResponse = await transport.send({
-      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+      url: `${sim.realm}/b2api/v3/b2_authorize_account`,
       method: 'GET',
       headers: {
         Authorization: `Basic ${btoa(`${key.applicationKeyId}:wrong-secret`)}`,
@@ -1545,7 +1593,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     expect(authBody.authorizationToken).toBeUndefined()
 
     const reserveResponse = await transport.send({
-      url: 'http://localhost:0/partner/b2api/v4/b2_reserve_trial_create_account',
+      url: `${sim.realm}/partner/b2api/v4/b2_reserve_trial_create_account`,
       method: 'POST',
       headers: {
         Authorization: authBody.authorizationToken ?? '',
@@ -1565,7 +1613,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     })
 
     const authResponse = await sim.transport().send({
-      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+      url: `${sim.realm}/b2api/v3/b2_authorize_account`,
       method: 'GET',
       headers: {
         Authorization: `Basic ${btoa(`${trial.applicationKeyId}:${trial.applicationKey}`)}`,

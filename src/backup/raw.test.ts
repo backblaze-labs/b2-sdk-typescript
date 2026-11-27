@@ -16,8 +16,8 @@ import {
 } from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
 import { derivePartnerAllowedSuffixes, PartnerRawClient } from '../partner/raw.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
+import { type RemoteSimulator, resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { accountId, computerId, partnerToken } from '../types/ids.ts'
 import { BackupRawClient } from './raw.ts'
 
@@ -75,7 +75,7 @@ function authorizedRawClient(
   return new BackupRawClient({ transport, authorizedBackupEndpointSuffixes: suffixes })
 }
 
-function makeRecordingSimulatorTransport(sim: B2Simulator): {
+function makeRecordingSimulatorTransport(sim: RemoteSimulator): {
   readonly transport: HttpTransport
   readonly seenRequests: HttpRequest[]
 } {
@@ -99,22 +99,24 @@ async function makeSimulatorBackupRawClient(): Promise<{
   readonly authToken: string
   readonly accountId: ReturnType<typeof accountId>
 }> {
-  const sim = new B2Simulator({ partnerAuthorize: true })
+  const sim = await resetRemoteSimulator({ partnerAuthorize: true })
   const { seenRequests, transport } = makeRecordingSimulatorTransport(sim)
   const retryTransport = new RetryTransport({
     transport,
     retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
     sleepImpl: noSleep,
   })
-  const partnerRaw = new PartnerRawClient({ transport: retryTransport })
-  const auth = await partnerRaw.authorizePartner('master-key-id', 'master-key')
+  // The standalone simulator's realm is a loopback http origin, which the
+  // Partner client accepts only as an explicitly allowed custom realm.
+  const partnerRaw = new PartnerRawClient({
+    transport: retryTransport,
+    allowCustomAuthorizeRealm: true,
+  })
+  const auth = await partnerRaw.authorizePartner('master-key-id', 'master-key', sim.realm)
   if (auth.backupApiUrl === undefined) throw new Error('expected simulator Backup API URL')
   const raw = new BackupRawClient({
     transport: retryTransport,
-    authorizedBackupEndpointSuffixes: derivePartnerAllowedSuffixes(
-      auth,
-      'https://api.backblazeb2.com',
-    ),
+    authorizedBackupEndpointSuffixes: derivePartnerAllowedSuffixes(auth, sim.realm),
   })
   return {
     raw,
