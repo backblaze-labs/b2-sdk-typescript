@@ -147,6 +147,70 @@ describe('ReauthCoalescer', () => {
     expect(refreshCalls).toBe(2)
   })
 
+  it('refreshes for a failed value that the last refresh did not replace', async () => {
+    let current = 'old-token'
+    let refreshCalls = 0
+    const coalescer = new ReauthCoalescer<string>(
+      async () => {
+        refreshCalls += 1
+        current = `fresh-token-${refreshCalls}`
+        return current
+      },
+      () => current,
+    )
+
+    await expect(coalescer.run(undefined, 'old-token')).resolves.toBe('fresh-token-1')
+    await expect(coalescer.run(undefined, 'unrelated-token')).resolves.toBe('fresh-token-2')
+    expect(refreshCalls).toBe(2)
+  })
+
+  it('rejects instead of throwing when reading the current value fails', async () => {
+    const failure = new Error('account info unavailable')
+    let refreshCalls = 0
+    let failRead = false
+    const coalescer = new ReauthCoalescer<string>(
+      async () => {
+        refreshCalls += 1
+        return `fresh-token-${refreshCalls}`
+      },
+      () => {
+        if (failRead) throw failure
+        return 'old-token'
+      },
+    )
+
+    await expect(coalescer.run(undefined, 'old-token')).resolves.toBe('fresh-token-1')
+    failRead = true
+    let result: Promise<string> | undefined
+    expect(() => {
+      result = coalescer.run(undefined, 'old-token')
+    }).not.toThrow()
+    await expect(result).rejects.toBe(failure)
+    expect(refreshCalls).toBe(1)
+  })
+
+  it('still refreshes when the current value cannot be read before a refresh', async () => {
+    let current: string | undefined
+    let readFails = true
+    let refreshCalls = 0
+    const coalescer = new ReauthCoalescer<string>(
+      async () => {
+        refreshCalls += 1
+        current = `fresh-token-${refreshCalls}`
+        return current
+      },
+      () => {
+        if (readFails) throw new Error('account info unavailable')
+        return current
+      },
+    )
+
+    await expect(coalescer.run(undefined, 'old-token')).resolves.toBe('fresh-token-1')
+    readFails = false
+    await expect(coalescer.run(undefined, 'old-token')).resolves.toBe('fresh-token-2')
+    expect(refreshCalls).toBe(2)
+  })
+
   it('does not abort a refresh that settles normally for the final waiter', async () => {
     let refreshSignal: AbortSignal | undefined
     const coalescer = new ReauthCoalescer<string>(async (signal) => {

@@ -21,10 +21,11 @@ interface InflightReauth<T> {
  * failed, or aborted refresh clears the in-flight slot so the next call can
  * start a new refresh.
  *
- * A caller whose request failed with an older value than the one the last
- * refresh produced gets that newer value back without a new refresh, as long
- * as it is still the current stored value. This covers a 401 that arrives
- * after the shared refresh for the same expiry has already finished.
+ * A caller whose request failed with the value that the last refresh
+ * replaced gets the refreshed value back without a new refresh, as long as
+ * the refreshed value is still the current stored value. This covers a 401
+ * that arrives after the shared refresh for the same expiry has already
+ * finished.
  *
  * @internal
  */
@@ -32,7 +33,7 @@ export class ReauthCoalescer<T> {
   readonly #refresh: ReauthRefresh<T>
   readonly #current: ReauthCurrent<T> | undefined
   #inflight: InflightReauth<T> | null = null
-  #latest: { readonly value: T } | null = null
+  #latest: { readonly value: T; readonly replaced: T | undefined } | null = null
 
   /**
    * Creates a new reauthorization coalescer.
@@ -54,15 +55,21 @@ export class ReauthCoalescer<T> {
    *
    * @param signal - Optional abort signal for this waiter.
    * @param staleValue - Optional value the caller's failed request used. When
-   *   it differs from the last refreshed value and that value is still
-   *   current, the last refreshed value is returned without a new refresh.
+   *   it is the value the last refresh replaced and the refreshed value is
+   *   still current, the refreshed value is returned without a new refresh.
    *
-   * @returns The shared refresh result, or the newer current value.
+   * @returns The shared refresh result, or the newer current value. Errors
+   *   from reading the current value reject the returned promise.
    */
   run(signal?: AbortSignal, staleValue?: T): Promise<T> {
     throwIfSignalAborted(signal)
     if (this.#inflight === null) {
-      const newer = this.newerCurrentValue(staleValue)
+      let newer: { readonly value: T } | null
+      try {
+        newer = this.newerCurrentValue(staleValue)
+      } catch (err) {
+        return Promise.reject(err)
+      }
       if (newer !== null) return Promise.resolve(newer.value)
     }
     const inflight = this.#inflight ?? this.start()
@@ -79,15 +86,25 @@ export class ReauthCoalescer<T> {
   private newerCurrentValue(staleValue: T | undefined): { readonly value: T } | null {
     const latest = this.#latest
     if (staleValue === undefined || latest === null || this.#current === undefined) return null
-    if (staleValue === latest.value || this.#current() !== latest.value) return null
+    if (staleValue !== latest.replaced || this.#current() !== latest.value) return null
     return latest
+  }
+
+  private readReplacedValue(): T | undefined {
+    try {
+      return this.#current?.() ?? undefined
+    } catch {
+      // Without a known replaced value, later stale callers refresh normally.
+      return undefined
+    }
   }
 
   private start(): InflightReauth<T> {
     const controller = new AbortController()
+    const replaced = this.readReplacedValue()
     const promise = raceWithAbort(this.#refresh(controller.signal), controller.signal)
       .then((value) => {
-        this.#latest = { value }
+        this.#latest = { value, replaced }
         return value
       })
       .finally(() => {
