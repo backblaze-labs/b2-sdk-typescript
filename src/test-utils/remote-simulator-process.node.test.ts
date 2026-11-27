@@ -75,6 +75,53 @@ describe('resolveServeScript (where the pinned simulator comes from)', () => {
     expect(build.lastIndexOf('secrets.SIMULATOR_DEPLOY_KEY')).toBeLessThan(release)
   })
 
+  // release.yml runs on ubuntu-latest; the step is a bash script.
+  it.skipIf(process.platform === 'win32')(
+    'release.yml names the cause when the checked-out simulator is not the pin',
+    async () => {
+      // Dispatching release.yml for a tag made before a pin bump checks out the
+      // new pin but runs the tag's pin.mjs, so the two differ.
+      const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8')
+      const step = workflow.match(
+        /- name: Verify the b2-simulator revision\n[\s\S]*?\n {8}run: \|\n((?: {10}.*\n)+)/,
+      )
+      expect(step).not.toBeNull()
+      const script = (step?.[1] ?? '').replace(/^ {10}/gm, '')
+      const dir = join(scratch, 'other-revision')
+      mkdirSync(dir)
+      const git = (...args: string[]) =>
+        new Promise<void>((resolve, reject) =>
+          spawn('git', ['-C', dir, ...args], { stdio: 'ignore' }).on('exit', (code) =>
+            code === 0 ? resolve() : reject(new Error(`git ${args[0]} exited ${code}`)),
+          ),
+        )
+      await git('init', '-q')
+      await git(
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@example.com',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'x',
+      )
+      const run = spawn('bash', ['-e', '-c', script], {
+        cwd: repoRoot,
+        env: { ...process.env, B2SIM_DIR: dir },
+      })
+      let out = ''
+      run.stdout.on('data', (chunk: Buffer) => (out += chunk.toString()))
+      run.stderr.on('data', (chunk: Buffer) => (out += chunk.toString()))
+      const code = await new Promise<number | null>((resolve) => run.on('exit', resolve))
+      expect(code).not.toBe(0)
+      expect(out).toContain('::error::')
+      expect(out).toContain(SIMULATOR_PIN.commit)
+      expect(out).toMatch(/pin\.mjs/)
+    },
+  )
+
   it('uses B2SIM_DIR when set, without fetching', () => {
     const dir = join(scratch, 'checkout')
     mkdirSync(join(dir, 'bin', 'simulator'), { recursive: true })

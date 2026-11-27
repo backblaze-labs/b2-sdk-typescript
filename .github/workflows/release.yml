@@ -161,7 +161,12 @@ jobs:
         env:
           B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
         run: |
-          test "$(git -C "$B2SIM_DIR" rev-parse HEAD)" = "$(node scripts/b2-simulator/pin.mjs)"
+          checked_out="$(git -C "$B2SIM_DIR" rev-parse HEAD)"
+          pinned="$(node scripts/b2-simulator/pin.mjs)"
+          if [ "$checked_out" != "$pinned" ]; then
+            echo "::error::This workflow checked out b2-simulator $checked_out, but the release commit's scripts/b2-simulator/pin.mjs pins $pinned. The workflow file and the tag disagree, which happens when a tag made before a pin bump is dispatched from another ref; dispatch the workflow from the tag itself."
+            exit 1
+          fi
           test -z "$(git -C "$B2SIM_DIR" status --short)"
       - run: pnpm test
         env:
