@@ -137,10 +137,15 @@ driven, never an assertion:
    call empties the server, so a second call in the same test wipes the first
    one's buckets and tokens, and the older handle throws when used. Do not use
    `describe.concurrent` / `it.concurrent` in a migrated file.
-7. The options `onWebhookDeliver`, `onReplicate`, `onHookError`,
-   `partnerGroupsCapabilities` and `partnerBackupCapabilities`, and anything
-   that reads the embedded simulator's internals, have no standalone
-   equivalent: leave that test on the embedded simulator and record it. The
+7. The options `onWebhookDeliver`, `onReplicate` and `onHookError`, and
+   anything that reads the embedded simulator's internals, have no standalone
+   equivalent: leave that test on the embedded simulator and record it.
+   `partnerGroupsCapabilities` and `partnerBackupCapabilities` pass through.
+   A `PartnerClient` / `BackupClient` also needs `allowCustomAuthorizeRealm: true`
+   next to `realm: sim.realm`, and a `PartnerRawClient` needs
+   `allowCustomAuthorizeRealm: true` and `authorizePartner(id, key, sim.realm)`:
+   the Partner client sends the master key only to Backblaze realms unless told
+   otherwise. The
    harness uses the global `fetch`, so a test that replaces `globalThis.fetch`
    must restore it before it calls the simulator.
 8. Run the file in Node, one browser and Bun, for example
