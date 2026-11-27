@@ -17,7 +17,7 @@ The existing rules and setup are in [AGENTS.md](../AGENTS.md),
 
 | Level | Command | Evidence and limits |
 | --- | --- | --- |
-| Unit and simulator | `pnpm test` | Exercises SDK behavior against the in-memory simulator; it does not prove live B2 behavior. |
+| Unit and simulator | `pnpm test` | Exercises SDK behavior against the in-memory simulator, and migrated files against the standalone b2-simulator (see CONTRIBUTING.md); it does not prove live B2 behavior. |
 | Browser | `pnpm test:browser` | Exercises shared tests in browser engines; see AGENTS.md for setup. |
 | Live integration | `pnpm test:integration` | Exercises real B2 with the configured credential profiles; tests can skip without credentials. |
 | Known defects | `pnpm test:known-defects` | Builds and runs the separate known-defect suite; unresolved defects are expected to fail. See its [README](../tests/known-defects/README.md). |

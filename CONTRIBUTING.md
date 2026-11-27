@@ -22,7 +22,7 @@ pnpm test
 | Command | Purpose |
 |---|---|
 | `pnpm build` | Build ESM + CJS + DTS via Vite library mode |
-| `pnpm test` | Run tests (Vitest, uses in-memory simulator) |
+| `pnpm test` | Run tests (Vitest; in-memory simulator, and the standalone b2-simulator for migrated files: run `pnpm run simulator:fetch` once) |
 | `pnpm test:known-defects` | Run the known-defect tests in `tests/known-defects/` (they assert correct behaviour that is not implemented yet, so this command exits non-zero until the defects are fixed; it runs `pnpm build` first because the example-program tests spawn the built package). See `tests/known-defects/README.md` |
 | `pnpm test:watch` | Run tests in watch mode |
 | `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 92% branches for the SDK; `src/simulator/` has its own gate in `vitest.coverage.config.ts`) |
@@ -40,7 +40,8 @@ CI also runs `bun test src/` against the same test suite plus a per-engine brows
 
 ### Simulator vs real B2
 
-`pnpm test` uses the in-memory `B2Simulator`: it is fast, deterministic, and
+`pnpm test` uses the in-memory `B2Simulator` (files migrated to the standalone
+b2-simulator excepted; see below): it is fast, deterministic, and
 models the SDK's supported wire contract. It is not a promise to preserve every
 historical Backblaze B2 behavior. During v3/v4 transition windows, the simulator
 should accept both routes only where the SDK intentionally supports both and the

@@ -43,7 +43,7 @@ dependencies in core. Built with Vite library mode + Vitest.
 
 ```bash
 pnpm build           # Vite library mode: ESM + CJS + DTS for all 12 export entries
-pnpm test            # Vitest: src/**/*.test.ts against the in-memory B2Simulator (Node)
+pnpm test            # Vitest: src/**/*.test.ts against the in-memory B2Simulator, migrated files against the standalone b2-simulator (Node)
 pnpm test:watch      # Vitest in watch mode
 pnpm test:coverage   # Vitest v8 coverage (gates: 97% statements, 98% lines, 97% functions, 92% branches for the SDK; src/simulator/ has its own gate)
 pnpm test:browser    # Vitest browser mode: real Chromium/Firefox/WebKit via Playwright
@@ -86,7 +86,7 @@ per-engine browser matrix.
 
 See the [testing guide](docs/testing.md) for test levels and evidence.
 
-Tests use the in-memory `B2Simulator` (no network):
+Most tests use the in-memory `B2Simulator` (no network):
 
 ```ts
 const sim = new B2Simulator()
