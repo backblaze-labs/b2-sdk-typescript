@@ -52,7 +52,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Install pnpm
+        shell: bash
+        run: npm install --global --ignore-scripts "pnpm@$(node -p "require('./package.json').packageManager.replace(/^pnpm@/, '').split('+')[0]")"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
@@ -70,14 +72,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Install pnpm
+        shell: bash
+        run: npm install --global --ignore-scripts "pnpm@$(node -p "require('./package.json').packageManager.replace(/^pnpm@/, '').split('+')[0]")"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.22.2
           cache: pnpm
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: latest
+      - name: Install Bun
+        run: npm install --global bun@latest
       - run: pnpm install --frozen-lockfile
       # Bun ships its own JS/TS runtime but we invoke `tsc` (from the pinned
       # devDep) so failures are apples-to-apples with the Node typecheck job.
@@ -93,7 +96,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Install pnpm
+        shell: bash
+        run: npm install --global --ignore-scripts "pnpm@$(node -p "require('./package.json').packageManager.replace(/^pnpm@/, '').split('+')[0]")"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.22.2
@@ -114,9 +119,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
-        with:
-          deno-version: v2.x
+      - name: Install Deno (latest v2.x, checksum-verified)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}-${RUNNER_ARCH}" in
+            Linux-X64) target=x86_64-unknown-linux-gnu ;;
+            Linux-ARM64) target=aarch64-unknown-linux-gnu ;;
+            macOS-X64) target=x86_64-apple-darwin ;;
+            macOS-ARM64) target=aarch64-apple-darwin ;;
+            *) echo "::error::No Deno build for ${RUNNER_OS}-${RUNNER_ARCH}"; exit 1 ;;
+          esac
+          version=$(gh release list --repo denoland/deno --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName' \
+            | grep -E '^v2\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          [[ -n "$version" ]] || { echo "::error::Could not resolve the latest Deno v2.x release"; exit 1; }
+          dir="${RUNNER_TEMP}/deno"
+          mkdir -p "$dir/bin"
+          gh release download "$version" --repo denoland/deno --dir "$dir" \
+            --pattern "deno-${target}.zip" --pattern "deno-${target}.zip.sha256sum"
+          expected=$(grep -oiE '^[0-9a-f]{64}' "$dir/deno-${target}.zip.sha256sum" | tr '[:upper:]' '[:lower:]')
+          actual=$(shasum -a 256 "$dir/deno-${target}.zip" | cut -d ' ' -f 1)
+          [[ -n "$expected" && "$expected" == "$actual" ]] || { echo "::error::Checksum mismatch for deno-${target}.zip ${version}"; exit 1; }
+          unzip -q -o "$dir/deno-${target}.zip" -d "$dir/bin"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          "$dir/bin/deno" --version
       # `deno check` uses Deno's own TS toolchain. The import map in
       # examples/deno.json points the bare specifiers (@backblaze-labs/b2-sdk, ...)
       # straight at the SDK source under ../src/*.ts. No build, no

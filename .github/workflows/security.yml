@@ -67,10 +67,9 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Install pnpm
         if: ${{ steps.audit-policy.outputs.available == 'true' }}
-        with:
-          version: 11.1.0
+        run: npm install --global --ignore-scripts pnpm@11.1.0
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: ${{ steps.audit-policy.outputs.available == 'true' }}

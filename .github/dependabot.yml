@@ -28,8 +28,7 @@ updates:
           - patch
 
   # GitHub Actions used by the CI, docs, examples, integration, and release
-  # workflows (actions/checkout, setup-node, pnpm/action-setup, deploy-pages,
-  # setup-bun, setup-deno, ...).
+  # workflows (actions/checkout, setup-node, deploy-pages, ...).
   - package-ecosystem: github-actions
     directory: /
     schedule:
