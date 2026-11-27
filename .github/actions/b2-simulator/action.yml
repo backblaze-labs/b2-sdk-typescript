@@ -30,15 +30,13 @@ runs:
           echo "::error::The tests need the private b2-simulator, which pull requests from forks cannot fetch. Push this change to a branch in $GITHUB_REPOSITORY."
           exit 1
         fi
+    # Checked with an expression so the key never enters a shell.
     - name: Require the deploy key
+      if: ${{ inputs.ssh-key == '' }}
       shell: bash
-      env:
-        SSH_KEY: ${{ inputs.ssh-key }}
       run: |
-        if [ -z "$SSH_KEY" ]; then
-          echo "::error::The SIMULATOR_DEPLOY_KEY secret is empty; the tests need it to check out backblaze-labs/b2-simulator."
-          exit 1
-        fi
+        echo "::error::The SIMULATOR_DEPLOY_KEY secret is empty; the tests need it to check out backblaze-labs/b2-simulator."
+        exit 1
     - name: Read the pinned commit
       id: pin
       shell: bash
