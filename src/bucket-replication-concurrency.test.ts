@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { makeClient } from './test-utils/index.ts'
+import { makeRemoteClient } from './test-utils/remote-simulator.ts'
 import { BucketType } from './types/bucket.ts'
 import { applicationKeyId, bucketId } from './types/ids.ts'
 import type { ReplicationRule } from './types/replication.ts'
 
 describe('bucket replication rule concurrent updates', () => {
   it('retains both concurrent additions and removals', async () => {
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'replication-race',

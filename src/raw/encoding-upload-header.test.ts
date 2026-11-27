@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 
 describe('upload file-name header guard', () => {
   it('a name containing & and , is sent verbatim and round-trips exactly', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const sentNames: string[] = []
     const transport: HttpTransport = {
@@ -17,7 +17,12 @@ describe('upload file-name header guard', () => {
         return inner.send(req)
       },
     }
-    const client = new B2Client({ applicationKeyId: 'k', applicationKey: 'k', transport })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      realm: sim.realm,
+      transport,
+    })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'upload-header-encoding',

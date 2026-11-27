@@ -17,6 +17,7 @@
  * @packageDocumentation
  */
 
+import { request as httpRequest } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import type { BrowserCommandContext } from 'vitest/node'
 import { resolveServeScript } from '../../scripts/b2-simulator/pin.mjs'
@@ -41,6 +42,49 @@ function serverFor(ctx: BrowserCommandContext): Promise<SimulatorProcess> {
     servers.set(key, pending)
   }
   return pending
+}
+
+/**
+ * Sends one request over plain HTTP and returns the response bytes exactly as
+ * the server sent them. Unlike `fetch`, this does not decode a
+ * `Content-Encoding` body: the realm echoes `b2ContentEncoding` overrides as
+ * `Content-Encoding` on bytes that are not encoded, and a browser only decodes
+ * a body when the page reads it, which a headers-only test never does.
+ *
+ * @param url - The request URL (an `http:` URL on the server's own origin).
+ * @param method - The HTTP method.
+ * @param headers - The request headers.
+ * @param body - The request body, or null for none.
+ *
+ * @returns The status, headers and raw body bytes.
+ */
+function sendRaw(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body: Buffer | null,
+): Promise<{ status: number; headers: [string, string][]; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    // Send a body with a Content-Length, as fetch does, not chunked.
+    const hasLength = Object.keys(headers).some((name) => name.toLowerCase() === 'content-length')
+    const sent =
+      body === null || hasLength ? headers : { ...headers, 'content-length': String(body.length) }
+    const req = httpRequest(url, { method, headers: sent }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('error', reject)
+      res.on('end', () => {
+        const entries: [string, string][] = []
+        for (const [name, value] of Object.entries(res.headers)) {
+          if (value === undefined) continue
+          entries.push([name, Array.isArray(value) ? value.join(', ') : value])
+        }
+        resolve({ status: res.statusCode ?? 0, headers: entries, body: Buffer.concat(chunks) })
+      })
+    })
+    req.on('error', reject)
+    req.end(body ?? undefined)
+  })
 }
 
 /** A B2 API request serialized for the command channel. */
@@ -119,10 +163,15 @@ export const b2SimulatorCommands = {
         `standalone simulator proxy refused ${origin}: it only reaches ${server.apiUrl}. Pass realm: sim.realm to the B2Client.`,
       )
     }
+    const body = request.body === null ? null : Buffer.from(request.body, 'base64')
+    if (origin === server.apiUrl) {
+      const response = await sendRaw(request.url, request.method, request.headers, body)
+      return { ...response, body: response.body.toString('base64') }
+    }
     const response = await fetch(request.url, {
       method: request.method,
       headers: request.headers,
-      body: request.body === null ? null : Buffer.from(request.body, 'base64'),
+      body,
       redirect: 'manual',
     })
     const bytes = Buffer.from(await response.arrayBuffer())

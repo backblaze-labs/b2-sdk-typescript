@@ -7,7 +7,8 @@ import { encodeFileName } from '../raw/encoding.ts'
 import { RawClient } from '../raw/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
-import { daysFromNow, makeClient, readStream } from '../test-utils/index.ts'
+import { daysFromNow, readStream } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { Capability } from '../types/auth.ts'
 import { DownloadClientUnauthorizedToReadMarker, DownloadHeaderName } from '../types/download.ts'
 import {
@@ -97,7 +98,7 @@ describe('downloadByName', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -158,7 +159,7 @@ describe('downloadById', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -428,7 +429,7 @@ describe('extractDownloadHeaders (via downloadById)', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -797,7 +798,7 @@ describe('extractDownloadHeaders (via downloadById)', () => {
   })
 
   it('round-trips simulator SSE-B2 and Object Lock download headers', async () => {
-    const { client: simClient } = makeClient()
+    const { client: simClient } = await makeRemoteClient()
     await simClient.authorize()
     const bucket = await simClient.createBucket({
       bucketName: 'hdr-sensitive-roundtrip',
@@ -839,7 +840,7 @@ describe('extractDownloadHeaders (via downloadById)', () => {
   })
 
   it('round-trips simulator SSE-C download echo headers', async () => {
-    const { client: simClient } = makeClient()
+    const { client: simClient } = await makeRemoteClient()
     await simClient.authorize()
     const bucket = await simClient.createBucket({
       bucketName: 'hdr-sse-c-roundtrip',
@@ -866,7 +867,7 @@ describe('extractDownloadHeaders (via downloadById)', () => {
   })
 
   it('reports simulator download headers hidden by missing read capabilities', async () => {
-    const { client: setupClient, sim } = makeClient({
+    const { client: setupClient, sim } = await makeRemoteClient({
       sim: { strictAuth: true },
       client: { retry: { maxRetries: 0 } },
     })
@@ -897,6 +898,7 @@ describe('extractDownloadHeaders (via downloadById)', () => {
     const scopedClient = new B2Client({
       applicationKeyId: key.applicationKeyId,
       applicationKey: key.applicationKey,
+      realm: sim.realm,
       transport: sim.transport(),
       retry: { maxRetries: 0 },
     })
@@ -2021,7 +2023,7 @@ describe('createParallelDownloadStream with simulator', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -2113,7 +2115,7 @@ describe('downloadById HEAD method and response-header overrides', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { B2Client } from './client.ts'
 import { ConflictError } from './errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
-import { B2Simulator } from './simulator/index.ts'
+import { resetRemoteSimulator } from './test-utils/remote-simulator.ts'
 import { BucketType, type LifecycleRule } from './types/bucket.ts'
 
 const rule = (fileNamePrefix: string): LifecycleRule => ({
@@ -14,7 +14,7 @@ const rule = (fileNamePrefix: string): LifecycleRule => ({
 describe('lifecycle rule revision conflicts', () => {
   for (const operation of ['add', 'remove'] as const) {
     it(`${operation} refetches after a conflicting update and preserves the other writer`, async () => {
-      const sim = new B2Simulator()
+      const sim = await resetRemoteSimulator()
       const inner = sim.transport()
       let injectConflict = false
       let updates = 0
@@ -40,6 +40,7 @@ describe('lifecycle rule revision conflicts', () => {
       const client = new B2Client({
         applicationKeyId: 'test-key-id',
         applicationKey: 'test-key',
+        realm: sim.realm,
         transport,
         retry: { maxRetries: 0 },
       })
@@ -60,7 +61,7 @@ describe('lifecycle rule revision conflicts', () => {
   }
 
   it('stops after repeated revision conflicts and surfaces the conflict', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let updates = 0
     const conflict = new ConflictError({
@@ -71,6 +72,7 @@ describe('lifecycle rule revision conflicts', () => {
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: {
         async send(req) {
           if (req.url.includes('b2_update_bucket')) {

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
-import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
-import { deterministicBytes, makeClient } from './test-utils/index.ts'
+import { deterministicBytes } from './test-utils/index.ts'
+import { makeRemoteClient, resetRemoteSimulator } from './test-utils/remote-simulator.ts'
 import { BucketType } from './types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from './types/encryption.ts'
 
@@ -24,8 +24,8 @@ import { EncryptionAlgorithm, EncryptionMode } from './types/encryption.ts'
  * exercising the per-spread branch.
  */
 
-function makeSmallPartClient(): { client: B2Client } {
-  return makeClient({ minimumPartSize: 100_000 })
+async function makeSmallPartClient(): Promise<{ client: B2Client }> {
+  return await makeRemoteClient({ minimumPartSize: 100_000 })
 }
 
 describe('Bucket.copyLargeFile branch coverage', () => {
@@ -34,7 +34,7 @@ describe('Bucket.copyLargeFile branch coverage', () => {
   let destBucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeSmallPartClient())
+    ;({ client } = await makeSmallPartClient())
     await client.authorize()
     sourceBucket = await client.createBucket({
       bucketName: 'src-bucket',
@@ -144,10 +144,11 @@ describe('Bucket.deleteAll error-yield path', () => {
     // fail. deleteAll should yield one `delete` event (success) and one
     // `error` event, then keep going to completion. Lines 470-476 in
     // bucket.ts handle the error yield.
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const client = new B2Client({
       applicationKeyId: 'k',
       applicationKey: 'k',
+      realm: sim.realm,
       transport: sim.transport(),
       retry: { maxRetries: 0 },
     })
@@ -167,7 +168,7 @@ describe('Bucket.deleteAll error-yield path', () => {
     })
 
     // Skip the first b2_delete_file_version, fail the second once.
-    sim.injectFailure({
+    await sim.injectFailure({
       on: 'b2_delete_file_version',
       skip: 1,
       count: 1,

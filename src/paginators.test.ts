@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import type { B2Client } from './client.ts'
 import { BufferSource } from './streams/source.ts'
-import { makeClient } from './test-utils/index.ts'
+import { makeRemoteClient } from './test-utils/remote-simulator.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 
 /**
  * Integration tests for the per-endpoint paginator methods on `Bucket`
- * and `B2Client`, wired through the in-memory `B2Simulator`. The generic
+ * and `B2Client`, wired through the standalone b2-simulator. The generic
  * `paginate*` factory has unit-test coverage in `util/paginator.test.ts`;
  * these tests exercise the cursor extraction + flattening glue per
  * endpoint, against real-shaped responses.
@@ -19,7 +19,7 @@ async function setup(options?: {
    *  instead of the 5 MB production default. Keeps the fast tier fast. */
   minimumPartSize?: number
 }): Promise<{ client: B2Client; bucket: Bucket }> {
-  const { client } = makeClient(
+  const { client } = await makeRemoteClient(
     options?.minimumPartSize !== undefined ? { minimumPartSize: options.minimumPartSize } : {},
   )
   await client.authorize()
@@ -267,6 +267,11 @@ describe('Bucket.paginateParts', () => {
 describe('B2Client.paginateKeys', () => {
   it('yields every application key across pages', async () => {
     const { client } = await setup()
+    // Keys the account already has before the test creates any. Like a real
+    // non-master key, the standalone simulator's credential is listed too.
+    const before = await client.listKeys({ pageSize: 1000 })
+    expect(before.nextApplicationKeyId).toBeNull()
+    const existing = before.keys.map((key) => key.keyName)
     // Create 4 application keys. paginate in pages of 2.
     for (const name of ['k1', 'k2', 'k3', 'k4']) {
       await client.createKey({
@@ -280,7 +285,8 @@ describe('B2Client.paginateKeys', () => {
     }
     // Simulator may return keys in insertion order or otherwise.
     // Assert membership rather than order.
-    expect(new Set(names)).toEqual(new Set(['k1', 'k2', 'k3', 'k4']))
+    expect(new Set(names)).toEqual(new Set([...existing, 'k1', 'k2', 'k3', 'k4']))
+    expect(names).toHaveLength(existing.length + 4)
   })
 
   it('aborts mid-iteration', async () => {

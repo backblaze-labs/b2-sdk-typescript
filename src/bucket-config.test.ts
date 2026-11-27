@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
-import type { B2Simulator } from './simulator/index.ts'
-import { makeClient } from './test-utils/index.ts'
+import { makeRemoteClient, type RemoteSimulator } from './test-utils/remote-simulator.ts'
 import { Capability } from './types/auth.ts'
 import {
   BucketRetentionMode,
@@ -27,7 +26,7 @@ async function makeBucket(
     readonly fileLockEnabled?: boolean
   } = {},
 ): Promise<{ bucket: Bucket; client: B2Client }> {
-  const { client } = makeClient()
+  const { client } = await makeRemoteClient()
   await client.authorize()
   const bucket = await client.createBucket({
     bucketName: 'cfg-bucket',
@@ -41,12 +40,13 @@ async function makeBucket(
 }
 
 async function authorizeWithKey(
-  sim: B2Simulator,
+  sim: RemoteSimulator,
   key: { readonly applicationKeyId: string; readonly applicationKey: string },
 ): Promise<B2Client> {
   const client = new B2Client({
     applicationKeyId: key.applicationKeyId,
     applicationKey: key.applicationKey,
+    realm: sim.realm,
     transport: sim.transport(),
     retry: { maxRetries: 0 },
   })
@@ -201,7 +201,7 @@ describe('Bucket.replication helpers', () => {
   })
 
   it('fails closed when refreshed replication settings are unreadable', async () => {
-    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    const { client, sim } = await makeRemoteClient({ sim: { strictAuth: true } })
     await client.authorize()
 
     const source = await client.createBucket({
