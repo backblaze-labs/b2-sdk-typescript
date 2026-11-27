@@ -189,10 +189,19 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
     await expect(getListedKeyById(created.applicationKeyId)).resolves.toBeUndefined()
   })
 
-  it('rejects requested capabilities outside the creator grant with 400', async () => {
-    expect(missingScopeableCapability).toBeDefined()
+  it('rejects requested capabilities outside the creator grant with 400', async (ctx) => {
     if (missingScopeableCapability === undefined) {
-      throw new Error('key-management credential must omit a file-scopeable capability')
+      // On the simulator this suite creates the key-management key itself with
+      // only requiredKeyCapabilities, so a missing capability is guaranteed and
+      // its absence is a bug. On live B2 the documented key-management
+      // credential may hold every checked capability, so skip with the reason.
+      if (simulatorAdminClient !== undefined) {
+        throw new Error('simulator key-management key must omit a file-scopeable capability')
+      }
+      ctx.skip(
+        'key-management credential has every checked file-scopeable capability; keep one (for example writeFiles) out of it to run this test',
+      )
+      return
     }
 
     await expectCreateKeyRejectedWith400({
