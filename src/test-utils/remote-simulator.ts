@@ -43,6 +43,8 @@ export interface StandaloneResetConfig {
   readonly partnerApiEnabled?: boolean
   readonly partnerAccountHasValidPhone?: boolean
   readonly partnerAccountInGoodStanding?: boolean
+  readonly partnerGroupsCapabilities?: readonly string[]
+  readonly partnerBackupCapabilities?: readonly string[]
 }
 
 /** Embedded options the standalone server takes under the same name and meaning. */
@@ -54,6 +56,8 @@ const PASS_THROUGH = [
   'partnerApiEnabled',
   'partnerAccountHasValidPhone',
   'partnerAccountInGoodStanding',
+  'partnerGroupsCapabilities',
+  'partnerBackupCapabilities',
 ] as const
 
 /**
@@ -61,13 +65,7 @@ const PASS_THROUGH = [
  * cross a process boundary; the standalone server has its own control routes
  * (`GET /webhooks`, `POST /drain`) for what the hooks were used to observe.
  */
-const NO_EQUIVALENT = new Set([
-  'onWebhookDeliver',
-  'onReplicate',
-  'onHookError',
-  'partnerGroupsCapabilities',
-  'partnerBackupCapabilities',
-])
+const NO_EQUIVALENT = new Set(['onWebhookDeliver', 'onReplicate', 'onHookError'])
 
 /**
  * Maps embedded {@link B2SimulatorOptions} to the standalone server's

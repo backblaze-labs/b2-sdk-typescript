@@ -29,6 +29,8 @@ describe('toResetConfig (B2SimulatorOptions -> POST /reset config)', () => {
         partnerAccountHasValidPhone: false,
         partnerAccountInGoodStanding: false,
         customUploadTimestampsEnabled: true,
+        partnerGroupsCapabilities: [],
+        partnerBackupCapabilities: ['all'],
       }),
     ).toEqual({
       profile: 'ts-sdk',
@@ -41,6 +43,8 @@ describe('toResetConfig (B2SimulatorOptions -> POST /reset config)', () => {
       partnerAccountHasValidPhone: false,
       partnerAccountInGoodStanding: false,
       customUploadTimestampsEnabled: true,
+      partnerGroupsCapabilities: [],
+      partnerBackupCapabilities: ['all'],
     })
   })
 
@@ -52,8 +56,6 @@ describe('toResetConfig (B2SimulatorOptions -> POST /reset config)', () => {
     ['onWebhookDeliver', { onWebhookDeliver: () => {} }],
     ['onReplicate', { onReplicate: () => {} }],
     ['onHookError', { onHookError: () => {} }],
-    ['partnerGroupsCapabilities', { partnerGroupsCapabilities: ['all'] }],
-    ['partnerBackupCapabilities', { partnerBackupCapabilities: ['all'] }],
   ])('refuses %s, which has no standalone equivalent', (name, options) => {
     expect(() => toResetConfig(options as never)).toThrow(
       new RegExp(`${name}.*no standalone simulator equivalent`),
