@@ -3,7 +3,9 @@
  *
  * Requires dedicated B2_KEY_MANAGEMENT_APPLICATION_KEY_ID /
  * B2_KEY_MANAGEMENT_APPLICATION_KEY credentials. The shared integration
- * credentials intentionally do not enable these tests.
+ * credentials intentionally do not enable these tests. Against the standalone
+ * b2-simulator (a loopback B2_REALM) the suite uses those credentials to create
+ * its own key-management key and scoped bucket.
  */
 
 import { randomUUID } from 'node:crypto'

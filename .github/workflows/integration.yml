@@ -4,7 +4,8 @@ name: Integration (real B2)
 # schedule or by explicit manual dispatch. Pull requests use B2 Simulator in
 # simulator-integration.yml and never receive live credentials.
 # release.yml holds a release unless this workflow's latest completed run on
-# main succeeded within 8 days (scripts/verify-live-b2-run.mjs).
+# main succeeded within 8 days and includes the release commit
+# (scripts/verify-live-b2-run.mjs).
 #
 # Required repo secrets:
 #   B2_APPLICATION_KEY_ID
@@ -108,7 +109,7 @@ jobs:
           B2_INTEGRATION_REQUIRE_CREDENTIALS: '1'
         run: |
           if [ -z "$B2_APPLICATION_KEY_ID" ] || [ -z "$B2_APPLICATION_KEY" ]; then
-            echo "::error::B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY secrets are required for same-repo real-B2 integration runs."
+            echo "::error::B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY secrets are required for real-B2 integration runs."
             exit 1
           fi
           pnpm exec vitest run --config vitest.integration.ts \
