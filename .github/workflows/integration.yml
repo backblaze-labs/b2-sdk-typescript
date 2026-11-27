@@ -3,6 +3,8 @@ name: Integration (real B2)
 # Runs the integration suite against a real Backblaze B2 account on the weekly
 # schedule or by explicit manual dispatch. Pull requests use B2 Simulator in
 # simulator-integration.yml and never receive live credentials.
+# release.yml holds a release unless this workflow's latest completed run on
+# main succeeded within 8 days (scripts/verify-live-b2-run.mjs).
 #
 # Required repo secrets:
 #   B2_APPLICATION_KEY_ID

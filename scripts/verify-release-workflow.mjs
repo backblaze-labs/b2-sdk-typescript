@@ -298,6 +298,14 @@ if (releasePolicyJob !== '') {
     if (!releasePolicyJob.includes(snippet))
       errors.push(`release.yml release-policy must include ${snippet}.`)
   }
+  if (!releasePolicyJob.includes('node scripts/verify-live-b2-run.mjs')) {
+    errors.push(
+      'release.yml release-policy must check for a recent green live B2 run (node scripts/verify-live-b2-run.mjs).',
+    )
+  }
+  if (!/^ {6}actions: read\b/m.test(releasePolicyJob)) {
+    errors.push('release.yml release-policy needs actions: read to check the live B2 run.')
+  }
 }
 if (securityJob !== '') {
   if (!/^ {4}environment: release-security\s*$/m.test(securityJob)) {

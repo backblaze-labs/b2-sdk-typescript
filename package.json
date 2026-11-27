@@ -175,6 +175,7 @@
     "test:release-policy": "node --test scripts/changelog-version.test.mjs scripts/release-policy.test.mjs scripts/release-workflow-policy.test.mjs",
     "release:security": "node scripts/release-security-check.mjs",
     "release:milestone": "node scripts/verify-release-milestone.mjs",
+    "release:live-b2": "node scripts/verify-live-b2-run.mjs",
     "release:tag": "node scripts/verify-release-tag.mjs",
     "version": "node scripts/changelog-version.mjs && git add -A CHANGELOG.md .changes",
     "review:test": "node --test scripts/review-risk.test.mjs scripts/review-metrics.test.mjs",

@@ -765,3 +765,99 @@ test('release tag parsing accepts full release names and rejects other refs', as
     assert.throws(() => releaseTag(input), /A release tag such as v1.2.3 is required/)
   }
 })
+
+function liveRunsApi(runs, seen = []) {
+  return async (path) => {
+    seen.push(path)
+    if (path.startsWith('repos/example/sdk/actions/workflows/integration.yml/runs?'))
+      return { total_count: runs.length, workflow_runs: runs }
+    throw new Error(`unexpected request ${path}`)
+  }
+}
+
+const liveNow = Date.parse('2026-11-27T12:00:00Z')
+const liveRun = (overrides = {}) => ({
+  id: 1,
+  event: 'schedule',
+  head_branch: 'main',
+  status: 'completed',
+  conclusion: 'success',
+  created_at: '2026-11-23T06:00:00Z',
+  html_url: 'https://github.com/example/sdk/actions/runs/1',
+  ...overrides,
+})
+
+test('release requires the latest live B2 run on main to be green and recent', async () => {
+  const { checkLiveB2Run } = await import('./verify-live-b2-run.mjs')
+  const seen = []
+  const run = await checkLiveB2Run({
+    repo: 'example/sdk',
+    now: liveNow,
+    api: liveRunsApi([liveRun()], seen),
+  })
+  assert.equal(run.id, 1)
+  assert.match(seen[0], /[?&]branch=main\b/)
+  assert.match(seen[0], /[?&]status=completed\b/)
+
+  // A manual dispatch counts as evidence, as does a pre-#467 push run on main.
+  for (const event of ['workflow_dispatch', 'push']) {
+    const ok = await checkLiveB2Run({
+      repo: 'example/sdk',
+      now: liveNow,
+      api: liveRunsApi([liveRun({ event })]),
+    })
+    assert.equal(ok.event, event)
+  }
+})
+
+test('a failed, stale or missing live B2 run blocks the release', async () => {
+  const { checkLiveB2Run } = await import('./verify-live-b2-run.mjs')
+  const cases = [
+    [
+      [liveRun({ id: 2, conclusion: 'failure', created_at: '2026-11-26T06:00:00Z' }), liveRun()],
+      /failure/,
+    ],
+    [[liveRun({ created_at: '2026-11-18T06:00:00Z' })], /older than 8 days/],
+    [[], /no completed/i],
+    // Runs from pull requests or other branches are not release evidence.
+    [[liveRun({ event: 'pull_request' })], /no completed/i],
+    [[liveRun({ head_branch: 'feature' })], /no completed/i],
+  ]
+  for (const [runs, message] of cases) {
+    await assert.rejects(
+      checkLiveB2Run({ repo: 'example/sdk', now: liveNow, api: liveRunsApi(runs) }),
+      message,
+    )
+  }
+})
+
+test('a cancelled newer live B2 run does not hide the latest real result', async () => {
+  const { checkLiveB2Run } = await import('./verify-live-b2-run.mjs')
+  const cancelled = liveRun({ id: 3, conclusion: 'cancelled', created_at: '2026-11-26T06:00:00Z' })
+  const green = await checkLiveB2Run({
+    repo: 'example/sdk',
+    now: liveNow,
+    api: liveRunsApi([cancelled, liveRun()]),
+  })
+  assert.equal(green.id, 1)
+  await assert.rejects(
+    checkLiveB2Run({
+      repo: 'example/sdk',
+      now: liveNow,
+      api: liveRunsApi([cancelled, liveRun({ conclusion: 'failure' })]),
+    }),
+    /failure/,
+  )
+})
+
+test('live B2 run API failures do not pass the release', async () => {
+  const { checkLiveB2Run } = await import('./verify-live-b2-run.mjs')
+  for (const api of [
+    async () => {
+      throw new Error('unavailable')
+    },
+    async () => ({ message: 'Not Found' }),
+  ]) {
+    await assert.rejects(checkLiveB2Run({ repo: 'example/sdk', now: liveNow, api }), /UNVERIFIED/)
+  }
+})
