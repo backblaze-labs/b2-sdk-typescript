@@ -83,6 +83,9 @@ jobs:
       # The SDK and src/simulator/ coverage gates must split src/ between them.
       - run: pnpm run verify:coverage-gates
         if: ${{ needs.changes.outputs.code == 'true' }}
+      # integration.yml and simulator-integration.yml triggers and key handling.
+      - run: pnpm run verify:integration-workflow
+        if: ${{ needs.changes.outputs.code == 'true' }}
 
   test-fast:
     name: Test fast (${{ matrix.os }} / Node ${{ matrix.node-version }})
@@ -396,7 +399,6 @@ jobs:
 
   # Real-B2 integration tests live in their own workflow (integration.yml),
   # which runs the Node 22.22.2 + 24 matrix sequentially + the real-examples
-  # follow-up + a weekly schedule + workflow_dispatch. Having a duplicate
-  # `pnpm test:integration` job here would race that workflow for the same
-  # `sdk-test-*` buckets on every push to main, because GitHub Actions
-  # `concurrency:` groups do not span workflows.
+  # follow-up on a weekly schedule or workflow_dispatch. Pull requests run the
+  # storage and application-key integration files against B2 Simulator in
+  # simulator-integration.yml.

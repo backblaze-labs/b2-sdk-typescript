@@ -40,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      actions: read # reads the latest live B2 run (integration.yml)
       contents: read
       issues: read
     outputs:
@@ -66,6 +67,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/verify-release-milestone.mjs "$REF"
+      # Pull requests test against the b2-simulator; real B2 runs weekly or by
+      # dispatch (integration.yml). Hold the release unless the latest live run
+      # on main is green, recent, and includes the inspected release commit.
+      # Otherwise dispatch `Integration (real B2)` on main, wait for green, then
+      # rerun this workflow.
+      - name: Verify a recent green live B2 run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.signature.outputs.commit }}
+        run: node scripts/verify-live-b2-run.mjs "$RELEASE_COMMIT"
 
   security:
     name: Release security triage

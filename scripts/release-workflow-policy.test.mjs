@@ -253,3 +253,30 @@ test('release security triage requires its protected environment selection', asy
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /security must use the release-security environment/)
 })
+
+test('release must check for a recent green live B2 run', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    workflow.replace('node scripts/verify-live-b2-run.mjs', 'node -e "process.exit(0)"'),
+  )
+  assert.notEqual(result.status, 0, 'the live B2 evidence gate must run')
+  assert.match(result.stderr, /live B2/i)
+})
+
+test('the live B2 run check needs read access to Actions runs', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    workflow.replace(/^ {6}actions: read.*\n/m, ''),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /actions: read/)
+})
+
+test('the live B2 run check gets the inspected release commit', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    workflow.replace(
+      `RELEASE_COMMIT: \${{ steps.signature.outputs.commit }}`,
+      `RELEASE_COMMIT: \${{ github.sha }}`,
+    ),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /live B2.*commit|commit.*live B2/i)
+})

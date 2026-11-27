@@ -3,7 +3,9 @@
  *
  * Requires dedicated B2_KEY_MANAGEMENT_APPLICATION_KEY_ID /
  * B2_KEY_MANAGEMENT_APPLICATION_KEY credentials. The shared integration
- * credentials intentionally do not enable these tests.
+ * credentials intentionally do not enable these tests. Against the standalone
+ * b2-simulator (a loopback B2_REALM) the suite uses those credentials to create
+ * its own key-management key and scoped bucket.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -14,7 +16,7 @@ import { Capability, type Capability as CapabilityValue } from '../../src/types/
 import { type ApplicationKeyId, type BucketId, bucketId } from '../../src/types/ids.ts'
 import type { ApplicationKey, CreateKeyOptions, FullApplicationKey } from '../../src/types/key.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
-import { liveRealmOptions } from '../helpers/live-b2.ts'
+import { liveRealmBypassesHostGuard, liveRealmOptions } from '../helpers/live-b2.ts'
 
 const keyManagementKeyId = env('B2_KEY_MANAGEMENT_APPLICATION_KEY_ID')
 const keyManagementAppKey = env('B2_KEY_MANAGEMENT_APPLICATION_KEY')
@@ -59,6 +61,8 @@ const namePrefix = `keys/${runLabel()}/`
 const keyDurationSeconds = 5 * 60
 
 let client: B2Client
+let simulatorAdminClient: B2Client | undefined
+let simulatorKeyManagementKeyId: ApplicationKeyId | undefined
 let scopedBucketId: BucketId
 let createdBucket: Bucket | undefined
 let missingScopeableCapability: CapabilityValue | undefined
@@ -66,19 +70,45 @@ const createdKeyIds = new Set<ApplicationKeyId>()
 
 describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
   beforeAll(async () => {
-    client = new B2Client({
+    const credentialClient = new B2Client({
       applicationKeyId: keyId,
       applicationKey: appKey,
       ...liveRealmOptions,
     })
-    await client.authorize()
+    await credentialClient.authorize()
+
+    if (liveRealmBypassesHostGuard) {
+      simulatorAdminClient = credentialClient
+      const keyManagementKey = await simulatorAdminClient.createKey({
+        keyName: makeKeyName('manager'),
+        capabilities: requiredKeyCapabilities,
+        validDurationInSeconds: keyDurationSeconds,
+      })
+      simulatorKeyManagementKeyId = keyManagementKey.applicationKeyId
+      client = new B2Client({
+        applicationKeyId: keyManagementKey.applicationKeyId,
+        applicationKey: keyManagementKey.applicationKey,
+        ...liveRealmOptions,
+      })
+      await client.authorize()
+    } else {
+      client = credentialClient
+    }
 
     requireCapabilities('application-key lifecycle', requiredKeyCapabilities)
     missingScopeableCapability = subsetRejectionCandidateCapabilities.find(
       (capability) => !client.hasCapabilities([capability]).ok,
     )
 
-    scopedBucketId = await resolveScopedBucketId()
+    if (simulatorAdminClient !== undefined) {
+      createdBucket = await simulatorAdminClient.createBucket({
+        bucketName: makeBucketName(),
+        bucketType: 'allPrivate',
+      })
+      scopedBucketId = createdBucket.id
+    } else {
+      scopedBucketId = await resolveScopedBucketId()
+    }
   })
 
   afterAll(async () => {
@@ -102,6 +132,19 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
         await createdBucket.delete()
       } catch (err) {
         cleanupErrors.push(err)
+      }
+    }
+
+    if (simulatorAdminClient !== undefined && simulatorKeyManagementKeyId !== undefined) {
+      try {
+        await simulatorAdminClient.deleteKey(simulatorKeyManagementKeyId)
+        simulatorKeyManagementKeyId = undefined
+      } catch (err) {
+        if (isAlreadyDeletedKeyError(err)) {
+          simulatorKeyManagementKeyId = undefined
+        } else {
+          cleanupErrors.push(err)
+        }
       }
     }
 
@@ -150,7 +193,16 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
 
   it('rejects requested capabilities outside the creator grant with 400', async (ctx) => {
     if (missingScopeableCapability === undefined) {
-      ctx.skip('key-management credential has every checked file-scopeable capability')
+      // On the simulator this suite creates the key-management key itself with
+      // only requiredKeyCapabilities, so a missing capability is guaranteed and
+      // its absence is a bug. On live B2 the documented key-management
+      // credential may hold every checked capability, so skip with the reason.
+      if (simulatorAdminClient !== undefined) {
+        throw new Error('simulator key-management key must omit a file-scopeable capability')
+      }
+      ctx.skip(
+        'key-management credential has every checked file-scopeable capability; keep one (for example writeFiles) out of it to run this test',
+      )
       return
     }
 

@@ -175,6 +175,7 @@
     "test:release-policy": "node --test scripts/changelog-version.test.mjs scripts/release-policy.test.mjs scripts/release-workflow-policy.test.mjs",
     "release:security": "node scripts/release-security-check.mjs",
     "release:milestone": "node scripts/verify-release-milestone.mjs",
+    "release:live-b2": "node scripts/verify-live-b2-run.mjs",
     "release:tag": "node scripts/verify-release-tag.mjs",
     "version": "node scripts/changelog-version.mjs && git add -A CHANGELOG.md .changes",
     "review:test": "node --test scripts/review-risk.test.mjs scripts/review-metrics.test.mjs",
@@ -185,12 +186,13 @@
     "verify:release-channel": "node scripts/verify-release-channel.mjs",
     "verify:ci-docs-filter": "node --test scripts/verify-docs-only-classifier.test.mjs",
     "verify:coverage-gates": "node --test scripts/verify-coverage-gates.test.mjs",
+    "verify:integration-workflow": "node --test scripts/integration-workflow-policy.test.mjs",
     "verify:docs-consistency": "node --test scripts/verify-docs-consistency.test.mjs scripts/verify-changelog-migration.test.mjs scripts/verify-use-b2-sdk.test.mjs scripts/docs-front-matter.test.mjs scripts/verify-llms-txt.test.mjs",
     "verify:exports": "node scripts/verify-package-exports.mjs",
     "verify:release-workflow": "node scripts/verify-release-workflow.mjs",
     "smoke:published": "node scripts/smoke-published-package.mjs",
     "test:smoke-published": "node --test scripts/smoke-published-package.test.mjs",
-    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run review:test && pnpm run typecheck && pnpm run typecheck:examples && pnpm run typecheck:known-defects && pnpm run test:qk-selection && pnpm run test:audit:deps && pnpm run test:sdkharness && pnpm run simulator:fetch && pnpm run test && pnpm run test:release-channel && pnpm run build && pnpm run verify:release-channel && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:ci-docs-filter && pnpm run verify:coverage-gates && pnpm run verify:docs-consistency && pnpm run verify:exports"
+    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run review:test && pnpm run typecheck && pnpm run typecheck:examples && pnpm run typecheck:known-defects && pnpm run test:qk-selection && pnpm run test:audit:deps && pnpm run test:sdkharness && pnpm run simulator:fetch && pnpm run test && pnpm run test:release-channel && pnpm run build && pnpm run verify:release-channel && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:ci-docs-filter && pnpm run verify:coverage-gates && pnpm run verify:integration-workflow && pnpm run verify:docs-consistency && pnpm run verify:exports"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",

@@ -283,11 +283,21 @@ pnpm test:browser   # real Chromium + Firefox + WebKit via Playwright
 pnpm pack --pack-destination /tmp && tar -tzf /tmp/backblaze-labs-b2-sdk-*.tgz | sort
 ```
 
-For live Backblaze B2 confidence, also verify that the relevant commit has a
-green `Integration (real B2)` workflow run, or manually dispatch that workflow
-before tagging. The release workflow does not run `pnpm test:integration`, so a
-successful publish gate alone does not prove the SDK has just passed against the
-real B2 service.
+Pull requests run their tests against the b2-simulator; real B2 runs in the
+`Integration (real B2)` workflow, weekly and by `workflow_dispatch`. The release
+workflow does not run `pnpm test:integration`, but it holds the release unless
+the latest completed run of that workflow on `main` (cancelled runs are ignored)
+succeeded within the last 8 days, ran on a commit that is on `main`, and
+includes the release commit (it ran on that commit or a later one). In practice:
+once the release PR has merged, dispatch `Integration (real B2)` on `main`, wait
+for it to pass, then check before tagging:
+
+```bash
+pnpm release:live-b2 <release-commit-sha>
+```
+
+If it reports a failed, old or earlier run, dispatch the workflow on `main`
+again, wait for it to pass, then tag (or rerun the release workflow).
 
 The tarball should contain `dist/` (`.js` / `.cjs` / `.d.ts` / `.d.cts` per entry), `README.md`, `LICENSE`, `CHANGELOG.md`, and **nothing** from `src/`, `coverage/`, or `node_modules/`. `pnpm run verify:exports` already asserts the dual-format type resolution.
 
@@ -335,14 +345,15 @@ Never move or delete a published tag.
 
 Pushing the tag fires [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
 
-1. Uses the configured workflow gates to load trusted policy from the default branch, verify the tag under the enrollment/enforcement mode, check milestone/security readiness, and pin artifact checkout to the inspected commit. The tag must match `package.json`. Repository-wide enforcement depends on the tag rulesets and protected-environment binding described above.
+1. Uses the configured workflow gates to load trusted policy from the default branch, verify the tag under the enrollment/enforcement mode, check milestone/security readiness and a recent green live B2 run on `main`, and pin artifact checkout to the inspected commit. The tag must match `package.json`. Repository-wide enforcement depends on the tag rulesets and protected-environment binding described above.
 2. Runs the quality gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:release`, `verify:exports`) and immediately packs/uploads that verified artifact. `attw` is informational, pinned, and runs through `npx` in a separate job that never creates the npm artifact or enters the build job dependency graph.
 3. `npm publish` over OIDC (skipped only if the version is already on the registry with matching integrity). Provenance is attested automatically.
 4. Creates the GitHub Release using the matching `CHANGELOG.md` section as the body (via `scripts/extract-changelog.mjs`).
 
-The release workflow intentionally stays packaging-focused. Treat the separate
-`Integration (real B2)` workflow as the live-service signal for PR, scheduled,
-manual, and release-readiness checks.
+The release workflow stays packaging-focused. The separate
+`Integration (real B2)` workflow is the live-service signal (weekly and manual);
+the release only checks that its latest run on `main` is green, recent and
+includes the release commit.
 
 Then confirm:
 
@@ -441,7 +452,7 @@ fragments, and the explicit preview keeps them with `--keep`. The eventual stabl
 ## Checklist (TL;DR)
 
 - [ ] Intended work and release PR belong to the exact `vX.Y.Z` milestone
-- [ ] Main CI and relevant live integration are green
+- [ ] Main CI is green and `pnpm release:live-b2 <sha>` passes (latest live B2 run on main is green, recent and includes the release commit)
 - [ ] Changie fragments cover the changes and explain compatibility/migration
 - [ ] pnpm/npm selects the version without creating a tag during PR preparation
 - [ ] `pnpm install --frozen-lockfile` and `pnpm run verify` pass

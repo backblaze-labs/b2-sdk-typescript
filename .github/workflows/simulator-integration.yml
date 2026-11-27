@@ -1,0 +1,79 @@
+name: Simulator Integration
+
+# Runs the live-shaped integration files (tests/integration/*) against the
+# standalone b2-simulator for pull requests and pushes to main. Real B2 runs
+# only in integration.yml, weekly or by workflow_dispatch.
+#
+# The simulator revision comes from scripts/b2-simulator/pin.mjs through the
+# shared .github/actions/b2-simulator action (fork PRs fail there, because
+# they cannot fetch the private simulator). Requires the SIMULATOR_DEPLOY_KEY
+# repo secret. The credentials below are simulator fixtures, not secrets.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  simulator-integration:
+    name: Simulator integration (Node ${{ matrix.node-version }})
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.22.2, 24]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check out the pinned b2-simulator
+        id: simulator
+        uses: ./.github/actions/b2-simulator
+        with:
+          ssh-key: ${{ secrets.SIMULATOR_DEPLOY_KEY }}
+      - name: Test integration files against the simulator
+        env:
+          B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
+          B2_APPLICATION_KEY_ID: sim-test-id
+          B2_APPLICATION_KEY: sim-test-secret
+          B2_INTEGRATION_REQUIRE_CREDENTIALS: "1"
+          B2_KEY_MANAGEMENT_APPLICATION_KEY_ID: sim-test-id
+          B2_KEY_MANAGEMENT_APPLICATION_KEY: sim-test-secret
+          B2_KEY_MANAGEMENT_REQUIRE_CREDENTIALS: "1"
+        run: |
+          simulator_log="$RUNNER_TEMP/b2-simulator.log"
+          node "$B2SIM_DIR/bin/simulator/serve.mjs" --custom-upload-timestamps >"$simulator_log" 2>&1 &
+          simulator_pid=$!
+          trap 'kill "$simulator_pid" 2>/dev/null || true; wait "$simulator_pid" 2>/dev/null || true' EXIT
+
+          B2_REALM=""
+          for _ in $(seq 1 150); do
+            B2_REALM="$(sed -n 's|^SIMULATOR-LISTENING \(https://127\.0\.0\.1:[0-9][0-9]*\)$|\1|p' "$simulator_log" | head -1)"
+            if [ -n "$B2_REALM" ]; then break; fi
+            if ! kill -0 "$simulator_pid" 2>/dev/null; then cat "$simulator_log"; exit 1; fi
+            sleep 0.2
+          done
+          if [ -z "$B2_REALM" ]; then cat "$simulator_log"; exit 1; fi
+          export B2_REALM
+          export NODE_EXTRA_CA_CERTS="$B2SIM_DIR/bin/simulator/loopback-cert.pem"
+          pnpm exec vitest run --config vitest.integration.ts \
+            tests/integration/b2.test.ts \
+            tests/integration/live-contracts.test.ts \
+            tests/integration/object-lock.test.ts \
+            tests/integration/keys.test.ts
