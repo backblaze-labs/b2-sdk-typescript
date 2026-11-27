@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { B2Client } from '../../src/client.ts'
 import { UploadResponseBodyError } from '../../src/errors/index.ts'
 import type { HttpRequest, HttpTransport } from '../../src/http/transport.ts'
-import { B2Simulator } from '../../src/simulator/index.ts'
 import { sha1Hex } from '../../src/streams/hash.ts'
 import { jsonErrorResponse, jsonResponse } from '../../src/test-utils/index.ts'
+import { resetRemoteSimulator } from '../../src/test-utils/remote-simulator.ts'
 import { uploadRawFile } from './raw-upload.ts'
 
 const retry = { maxRetries: 2, initialRetryDelayMs: 0, maxRetryDelayMs: 0 }
 
 async function fixture(failures: number, status = 500, malformedSuccess = false) {
-  const sim = new B2Simulator()
+  const sim = await resetRemoteSimulator()
   const inner = sim.transport()
   const requests: HttpRequest[] = []
   const transport: HttpTransport = {
@@ -41,6 +41,7 @@ async function fixture(failures: number, status = 500, malformedSuccess = false)
   const client = new B2Client({
     applicationKeyId: 'test-key',
     applicationKey: 'test-secret',
+    realm: sim.realm,
     transport,
     retry: { maxRetries: 0 },
   })

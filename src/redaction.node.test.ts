@@ -22,12 +22,12 @@ import {
   InMemoryAccountInfo,
 } from './index.ts'
 import { InMemoryPartnerAccountInfo, PartnerClient } from './partner/index.ts'
-import { B2Simulator } from './simulator/index.ts'
 import { jsonResponse } from './test-utils/index.ts'
 import {
   CREDENTIAL_BEARING_EXPORTS,
   REVIEWED_EXPORTS,
 } from './test-utils/redaction-export-review.ts'
+import { resetRemoteSimulator } from './test-utils/remote-simulator.ts'
 import type { AuthorizeAccountResponse } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import { type AuthToken, bucketId, largeFileId, partnerToken } from './types/ids.ts'
@@ -46,10 +46,11 @@ afterEach(async () => {
 })
 
 async function fixture(store: AccountInfo = new InMemoryAccountInfo()) {
-  const sim = new B2Simulator()
+  const sim = await resetRemoteSimulator()
   const seed = new B2Client({
     applicationKeyId: 'key-id',
     applicationKey: APP_KEY,
+    realm: sim.realm,
     transport: sim.transport(),
   })
   const auth = { ...(await seed.authorize()), authorizationToken: ACCOUNT_TOKEN as AuthToken }
@@ -88,7 +89,14 @@ async function fixture(store: AccountInfo = new InMemoryAccountInfo()) {
     },
   })
   const bucket = new Bucket(client, info, DEFAULT_RETRY_OPTIONS)
-  return { auth, store, client, bucket, object: bucket.file('diagnostic.txt') }
+  return {
+    auth,
+    store,
+    client,
+    bucket,
+    object: bucket.file('diagnostic.txt'),
+    realm: sim.realm,
+  }
 }
 
 function assertNoSecrets(rendered: string): void {
@@ -323,9 +331,9 @@ describe('credential redaction Node diagnostics', () => {
     'file store disk round-trip keeps the real token (bound=%s)',
     async (bound) => {
       const { path, store } = await fileStore()
-      const { auth } = await fixture()
+      const { auth, realm } = await fixture()
       if (bound) {
-        store.setRealmUrl('https://api.backblazeb2.com')
+        store.setRealmUrl(realm)
         store.setApplicationKeyId('key-id')
       }
       store.setAuth(auth)
@@ -333,7 +341,7 @@ describe('credential redaction Node diagnostics', () => {
       expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
       const reloaded = new FileAccountInfo(path)
       if (bound) {
-        reloaded.setRealmUrl('https://api.backblazeb2.com')
+        reloaded.setRealmUrl(realm)
         reloaded.setApplicationKeyId('key-id')
       }
       await reloaded.load()
@@ -470,23 +478,31 @@ describe('credential redaction Node diagnostics', () => {
     await file.flushed()
     const pool = new UploadUrlPool()
     pool.checkin('bucket', entry)
-    const sim = new B2Simulator({ partnerAuthorize: true })
+    const sim = await resetRemoteSimulator({ partnerAuthorize: true })
     const partnerStore = new InMemoryPartnerAccountInfo()
+    // The standalone simulator's realm is a loopback http origin, which the
+    // Partner authorizer accepts only as an explicitly allowed custom realm.
     const partner = new PartnerClient({
       masterKeyId: 'key-id',
       masterKey: APP_KEY,
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       partnerAccountInfo: partnerStore,
       transport: sim.transport(),
     })
     const partnerAuth = await new PartnerClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       transport: sim.transport(),
     }).authorize()
     partnerStore.setAuth({ ...partnerAuth, authorizationToken: partnerToken(ACCOUNT_TOKEN) })
     const backup = new BackupClient({
       masterKeyId: 'key-id',
       masterKey: APP_KEY,
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       partnerAccountInfo: partnerStore,
       transport: sim.transport(),
     })
