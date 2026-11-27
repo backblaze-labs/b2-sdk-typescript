@@ -80,6 +80,9 @@ jobs:
         if: ${{ needs.changes.outputs.code == 'true' || needs.changes.outputs.docs == 'true' }}
       - run: pnpm run verify:ci-docs-filter
         if: ${{ needs.changes.outputs.code == 'true' }}
+      # The SDK and src/simulator/ coverage gates must split src/ between them.
+      - run: pnpm run verify:coverage-gates
+        if: ${{ needs.changes.outputs.code == 'true' }}
 
   test-fast:
     name: Test fast (${{ matrix.os }} / Node ${{ matrix.node-version }})
