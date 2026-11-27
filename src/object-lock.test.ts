@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
-import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
 import { daysFromNow } from './test-utils/index.ts'
+import { type RemoteSimulator, resetRemoteSimulator } from './test-utils/remote-simulator.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import { type FileRetentionValue, LegalHoldValue, RetentionMode } from './types/lock.ts'
@@ -19,12 +19,13 @@ import { type FileRetentionValue, LegalHoldValue, RetentionMode } from './types/
 async function setup(options: { fileLockEnabled?: boolean; strictAuth?: boolean } = {}): Promise<{
   bucket: Bucket
   client: B2Client
-  sim: B2Simulator
+  sim: RemoteSimulator
 }> {
-  const sim = new B2Simulator(options.strictAuth === true ? { strictAuth: true } : {})
+  const sim = await resetRemoteSimulator(options.strictAuth === true ? { strictAuth: true } : {})
   const client = new B2Client({
     applicationKeyId: 'test-key-id',
     applicationKey: 'test-key',
+    realm: sim.realm,
     transport: sim.transport(),
   })
   await client.authorize()
@@ -37,12 +38,13 @@ async function setup(options: { fileLockEnabled?: boolean; strictAuth?: boolean 
 }
 
 async function authorizeWithKey(
-  sim: B2Simulator,
+  sim: RemoteSimulator,
   key: { applicationKeyId: string; applicationKey: string },
 ): Promise<B2Client> {
   const client = new B2Client({
     applicationKeyId: key.applicationKeyId,
     applicationKey: key.applicationKey,
+    realm: sim.realm,
     transport: sim.transport(),
   })
   await client.authorize()
@@ -514,9 +516,10 @@ describe('B2Simulator: update retention and legal hold enforce Object Lock', () 
  */
 describe('B2Simulator: deleteFileVersion respects Object Lock', () => {
   let bucket: Bucket
+  let sim: RemoteSimulator
 
   beforeEach(async () => {
-    ;({ bucket } = await setup())
+    ;({ bucket, sim } = await setup())
   })
 
   it('rejects delete of a compliance-mode retained version (no bypass possible)', async () => {
@@ -586,15 +589,11 @@ describe('B2Simulator: deleteFileVersion respects Object Lock', () => {
       retainUntilTimestamp: expiresAt,
     })
 
-    const realDateNow = Date.now
-    Date.now = () => expiresAt + 1
-    try {
-      await expect(
-        bucket.deleteFileVersion('gov-expired.bin', uploaded.fileId),
-      ).resolves.toBeUndefined()
-    } finally {
-      Date.now = realDateNow
-    }
+    // Move the simulator's clock (not this process's) past the retain-until time.
+    await sim.advanceTime(Math.max(1, expiresAt + 1 - Date.now()))
+    await expect(
+      bucket.deleteFileVersion('gov-expired.bin', uploaded.fileId),
+    ).resolves.toBeUndefined()
   })
 
   it('rejects delete of a legal-hold-protected version (bypass does not help)', async () => {

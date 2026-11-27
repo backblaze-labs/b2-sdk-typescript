@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import { BufferSource } from '../streams/source.ts'
-import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
+import { deterministicBytes, readStream } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { fileId } from '../types/ids.ts'
 import { createParallelDownloadStream } from './parallel.ts'
@@ -31,7 +32,7 @@ function downloadWith(options: { concurrency?: number; rangeSize?: number; total
 
 describe('parallel download option validation', () => {
   it('rejects concurrency 0 instead of silently returning zero bytes', async () => {
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'download-validation',

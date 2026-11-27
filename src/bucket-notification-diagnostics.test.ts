@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
 import { B2Client, BucketType, type EventNotificationRule, EventType } from './index.ts'
-import { B2Simulator } from './simulator/index.ts'
-import { jsonErrorResponse, makeClient } from './test-utils/index.ts'
+import { jsonErrorResponse } from './test-utils/index.ts'
+import { makeRemoteClient, resetRemoteSimulator } from './test-utils/remote-simulator.ts'
 
 /**
  * Operation-level secret non-exposure for `Bucket.setNotificationRules`, the SDK's
@@ -40,7 +40,7 @@ function sensitiveRule(): EventNotificationRule {
 }
 
 async function setup() {
-  const { client } = makeClient({ client: { retry: { maxRetries: 0 } } })
+  const { client } = await makeRemoteClient({ client: { retry: { maxRetries: 0 } } })
   await client.authorize()
   const bucket = await client.createBucket({
     bucketName: 'notif-diagnostics',
@@ -51,7 +51,7 @@ async function setup() {
 
 /** A client whose notification-rules endpoint answers with a server error. */
 async function setupWithServerError() {
-  const sim = new B2Simulator()
+  const sim = await resetRemoteSimulator()
   const inner = sim.transport()
   const transport: HttpTransport = {
     send(request: HttpRequest): Promise<HttpResponse> {
@@ -64,6 +64,7 @@ async function setupWithServerError() {
   const client = new B2Client({
     applicationKeyId: 'test-key-id',
     applicationKey: 'test-key',
+    realm: sim.realm,
     transport,
     retry: { maxRetries: 0 },
   })

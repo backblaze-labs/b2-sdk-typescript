@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { B2Client } from './client.ts'
 import { ConflictError } from './errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
-import { B2Simulator } from './simulator/index.ts'
+import { resetRemoteSimulator } from './test-utils/remote-simulator.ts'
 import { BucketType } from './types/bucket.ts'
 
 describe('bucket lifecycle rule concurrent updates', () => {
   it('two concurrent addLifecycleRule calls never silently lose one rule', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     // Barrier: hold the first b2_list_buckets response until the second request
     // has been issued, so both callers read the same (stale) rule set. A correct
@@ -38,6 +38,7 @@ describe('bucket lifecycle rule concurrent updates', () => {
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport,
       retry: { maxRetries: 0 },
     })

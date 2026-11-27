@@ -3,8 +3,8 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Client } from '../client.ts'
 import { type HttpRequest, type HttpResponse, RetryTransport } from '../http/transport.ts'
 import { RawClient } from '../raw/index.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { readStream } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { fileId } from '../types/ids.ts'
 import { createParallelDownloadStream } from './parallel.ts'
 
@@ -77,13 +77,14 @@ describe('parallel range response body resets', () => {
 
   it.each([0, 1, 2])('honors the client retry budget of %i for body resets', async (maxRetries) => {
     const data = Uint8Array.from([1, 2, 3, 4, 5, 6])
-    const simulator = new B2Simulator()
+    const simulator = await resetRemoteSimulator()
     const inner = simulator.transport()
     let attempts = 0
     const reset = Object.assign(new Error('connection reset'), { code: 'ECONNRESET' })
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: simulator.realm,
       retry: { maxRetries, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
       transport: {
         async send(request) {

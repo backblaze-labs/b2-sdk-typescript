@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket, DeleteAllEvent, DeleteTarget } from './bucket.ts'
 import type { B2Client } from './client.ts'
 import { BufferSource } from './streams/source.ts'
-import { makeClient } from './test-utils/index.ts'
+import { makeRemoteClient } from './test-utils/remote-simulator.ts'
 import { BucketType } from './types/bucket.ts'
 import { FileAction } from './types/file.ts'
 
@@ -24,7 +24,7 @@ describe('Bucket.deleteMany', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'bulk-many',
@@ -91,7 +91,7 @@ describe('Bucket.deleteAll', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'bulk-all',
