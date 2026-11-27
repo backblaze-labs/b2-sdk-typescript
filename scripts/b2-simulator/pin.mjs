@@ -15,8 +15,8 @@ import { pathToFileURL } from 'node:url'
  */
 export const SIMULATOR_PIN = Object.freeze({
   repository: 'https://github.com/backblaze-labs/b2-simulator.git',
-  // b2-simulator main with POST /reset on the control plane.
-  commit: 'a1e1db373b71f2d5f40082c19bc716cb6b3c3675',
+  // b2-simulator v0.6.0 (tag v0.6.0 on main).
+  commit: '4052c6f8f45350486460d19bc796866cbdcdd3bc',
 })
 
 const SERVE = join('bin', 'simulator', 'serve.mjs')

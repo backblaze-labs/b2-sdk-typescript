@@ -5,8 +5,9 @@ import { describe, expect, it } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
+import type { B2SimulatorOptions } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { FileAction } from '../types/file.ts'
 import type { StartLargeFileResponse } from '../types/upload.ts'
@@ -29,12 +30,13 @@ async function collect(config: SynchronizerConfig): Promise<SyncEvent[]> {
 async function makeBucket(
   name: string,
   wrap?: (inner: HttpTransport) => HttpTransport,
-  simOptions: ConstructorParameters<typeof B2Simulator>[0] = {},
+  simOptions: B2SimulatorOptions = {},
 ): Promise<{ client: B2Client; bucket: Bucket }> {
-  const sim = new B2Simulator(simOptions)
+  const sim = await resetRemoteSimulator(simOptions)
   const client = new B2Client({
     applicationKeyId: 'test-key-id',
     applicationKey: 'test-key',
+    realm: sim.realm,
     transport: wrap ? wrap(sim.transport()) : sim.transport(),
     retry: { maxRetries: 0 },
   })

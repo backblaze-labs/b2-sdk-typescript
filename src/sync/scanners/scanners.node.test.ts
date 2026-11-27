@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../../bucket.ts'
 import type { B2Client } from '../../client.ts'
 import { BufferSource } from '../../streams/source.ts'
-import { makeClient } from '../../test-utils/index.ts'
+import { makeRemoteClient, type RemoteSimulator } from '../../test-utils/remote-simulator.ts'
 import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
 import {
@@ -49,12 +49,14 @@ const reservedTempName = makeReservedSyncTempFileName(
 )
 
 /**
- * Advance the fake clock by 1 ms so the simulator assigns a distinct
- * uploadTimestamp to each file version. Call between successive uploads
- * or between an upload and a hide.
+ * Advance the simulator's virtual clock (`POST /clock`) by 1 ms so it assigns
+ * a distinct uploadTimestamp to each file version. Call between successive
+ * uploads or between an upload and a hide.
+ *
+ * @param sim - The simulator the test is using.
  */
-function tick(): void {
-  vi.advanceTimersByTime(1)
+async function tick(sim: RemoteSimulator): Promise<void> {
+  await sim.advanceTime(1)
 }
 
 function makeB2FileVersion(
@@ -704,15 +706,11 @@ describe('LocalFolder', () => {
 
 describe('B2Folder', () => {
   let client: B2Client
+  let sim: RemoteSimulator
 
   beforeEach(async () => {
-    vi.useFakeTimers({ now: Date.now() })
-    ;({ client } = makeClient())
+    ;({ client, sim } = await makeRemoteClient())
     await client.authorize()
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
   })
 
   it('scans an empty bucket and yields nothing', async () => {
@@ -864,13 +862,13 @@ describe('B2Folder', () => {
 
     // Upload in non-alphabetical order
     await bucket.upload({ fileName: 'zebra.txt', source: new BufferSource(enc.encode('z')) })
-    tick()
+    await tick(sim)
     await bucket.upload({ fileName: 'Zebra.txt', source: new BufferSource(enc.encode('Z')) })
-    tick()
+    await tick(sim)
     await bucket.upload({ fileName: 'apple.txt', source: new BufferSource(enc.encode('a')) })
-    tick()
+    await tick(sim)
     await bucket.upload({ fileName: 'mango.txt', source: new BufferSource(enc.encode('m')) })
-    tick()
+    await tick(sim)
     await bucket.upload({ fileName: 'Zoo.txt', source: new BufferSource(enc.encode('Z')) })
 
     const folder = new B2Folder(bucket)
@@ -900,12 +898,12 @@ describe('B2Folder', () => {
     })
 
     await bucket.upload({ fileName: 'keep.txt', source: new BufferSource(enc.encode('keep')) })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'hidden.txt',
       source: new BufferSource(enc.encode('will hide')),
     })
-    tick()
+    await tick(sim)
     await bucket.hideFile('hidden.txt')
 
     const folder = new B2Folder(bucket)
@@ -950,7 +948,7 @@ describe('B2Folder', () => {
     })
 
     await bucket.upload({ fileName: 'a.txt', source: new BufferSource(enc.encode('a1')) })
-    tick()
+    await tick(sim)
     await bucket.upload({ fileName: 'a.txt', source: new BufferSource(enc.encode('a2')) })
 
     const folder = new B2Folder(bucket)
@@ -1106,9 +1104,9 @@ describe('B2Folder', () => {
     // Upload the same file three times to create multiple versions.
     // Advance the fake clock between each upload so each gets a distinct timestamp.
     await bucket.upload({ fileName: 'doc.txt', source: new BufferSource(enc.encode('v1')) })
-    tick()
+    await tick(sim)
     await bucket.upload({ fileName: 'doc.txt', source: new BufferSource(enc.encode('v2--')) })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'doc.txt',
       source: new BufferSource(enc.encode('v3------')),
@@ -1146,17 +1144,17 @@ describe('B2Folder', () => {
       fileName: 'photos/cat.jpg',
       source: new BufferSource(enc.encode('cat')),
     })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'photos/dog.jpg',
       source: new BufferSource(enc.encode('dog')),
     })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'docs/readme.md',
       source: new BufferSource(enc.encode('readme')),
     })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'docs/guide.md',
       source: new BufferSource(enc.encode('guide')),
@@ -1199,12 +1197,12 @@ describe('B2Folder', () => {
       fileName: 'backup/docs/readme.md',
       source: new BufferSource(enc.encode('readme')),
     })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'backup/docs/draft.tmp',
       source: new BufferSource(enc.encode('draft')),
     })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'backup/cache/artifact.md',
       source: new BufferSource(enc.encode('cache')),
@@ -1231,12 +1229,12 @@ describe('B2Folder', () => {
       fileName: 'backup/a/b/c.txt',
       source: new BufferSource(enc.encode('keep')),
     })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'backup/build/output/app.js',
       source: new BufferSource(enc.encode('keep')),
     })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'backup/build/other/app.js',
       source: new BufferSource(enc.encode('keep')),
@@ -1265,7 +1263,7 @@ describe('B2Folder', () => {
       fileName: 'backupfile.txt',
       source: new BufferSource(enc.encode('raw-prefix')),
     })
-    tick()
+    await tick(sim)
     await bucket.upload({
       fileName: 'backup/docs/readme.md',
       source: new BufferSource(enc.encode('readme')),

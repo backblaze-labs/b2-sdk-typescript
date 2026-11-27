@@ -17,8 +17,8 @@ import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import { ChecksumMismatchError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { deterministicBytes } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion, type ListedFileVersion } from '../types/file.ts'
@@ -185,10 +185,11 @@ describe('synchronize large local files', () => {
       await writeFile(filePath, payload)
 
       const urls: string[] = []
-      const sim = new B2Simulator({ minimumPartSize: 1024, recommendedPartSize: 1024 })
+      const sim = await resetRemoteSimulator({ minimumPartSize: 1024, recommendedPartSize: 1024 })
       const client = new B2Client({
         applicationKeyId: 'test-key-id',
         applicationKey: 'test-key',
+        realm: sim.realm,
         transport: recordingTransport(sim.transport(), urls),
       })
       await client.authorize()
