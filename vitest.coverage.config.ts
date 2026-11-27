@@ -71,7 +71,10 @@ export default defineConfig({
       // the `/simulator` export) is gated separately at what its own tests
       // reach: SDK tests that move to the standalone b2-simulator stop
       // exercising it, and that must not fail, or be hidden by, the SDK gate.
+      // Its statements, lines and branches numbers are lower than the old
+      // global gate (97 / 98 / 92); its functions number is higher (old 97).
       // There is no global gate: it would mix the two.
+      // scripts/verify-coverage-gates.test.mjs checks the two globs split src/.
       thresholds: {
         'src/{*.ts,!(simulator)/**}': {
           statements: 97,

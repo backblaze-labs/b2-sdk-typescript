@@ -25,7 +25,7 @@ pnpm test
 | `pnpm test` | Run tests (Vitest; in-memory simulator, and the standalone b2-simulator for migrated files: run `pnpm run simulator:fetch` once) |
 | `pnpm test:known-defects` | Run the known-defect tests in `tests/known-defects/` (they assert correct behaviour that is not implemented yet, so this command exits non-zero until the defects are fixed; it runs `pnpm build` first because the example-program tests spawn the built package). See `tests/known-defects/README.md` |
 | `pnpm test:watch` | Run tests in watch mode |
-| `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 92% branches for the SDK; `src/simulator/` has its own gate in `vitest.coverage.config.ts`) |
+| `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 92% branches for the SDK; the embedded `src/simulator/` has a separate gate set lower than the SDK's for statements, lines and branches, in `vitest.coverage.config.ts`) |
 | `pnpm test:browser` | Run the test suite in real Chromium/Firefox/WebKit via Playwright |
 | `pnpm lint` | Check formatting + lint rules (Biome, `--error-on-warnings` — any warning fails) |
 | `pnpm lint:fix` | Auto-fix lint and formatting issues |
