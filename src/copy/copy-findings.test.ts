@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { BufferSource } from '../streams/source.ts'
-import { makeClient } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 
 describe('copy findings', () => {
   it('Finding C23: Bucket.copyFile without destinationBucketId copies into this bucket', async () => {
-    const { client } = makeClient()
+    const { client } = await makeRemoteClient()
     await client.authorize()
     const src = await client.createBucket({
       bucketName: 'copy-c23-src',

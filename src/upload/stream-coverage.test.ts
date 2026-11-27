@@ -5,8 +5,8 @@ import { B2Client } from '../client.ts'
 import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import type { RawClient } from '../raw/index.ts'
-import { B2Simulator } from '../simulator/index.ts'
-import { deferred, deterministicBytes, makeClient } from '../test-utils/index.ts'
+import { deferred, deterministicBytes } from '../test-utils/index.ts'
+import { makeRemoteClient, resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
@@ -38,7 +38,10 @@ describe('createWriteStream branch coverage', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 200_000 }))
+    ;({ client } = await makeRemoteClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 200_000,
+    }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'stream-cov',
@@ -64,7 +67,7 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('passes customUploadTimestamp through createWriteStream', async () => {
-    const { client: timestampClient } = makeClient({
+    const { client: timestampClient } = await makeRemoteClient({
       sim: {
         minimumPartSize: 100_000,
         recommendedPartSize: 200_000,
@@ -96,7 +99,10 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('applies backpressure instead of queueing stalled part buffers', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let uploadStarts = 0
     const uploadStartWaiters: Array<() => void> = []
@@ -120,6 +126,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const stallClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: stalledTransport,
@@ -162,7 +169,10 @@ describe('createWriteStream branch coverage', () => {
     // Error instance). The engine's `errored` latch must wrap it via
     // `new Error(String(err))` rather than passing it through unchanged,
     // so `done` ultimately rejects with an actual Error subclass.
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 200_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 200_000,
+    })
     const inner = sim.transport()
     const failing: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
@@ -174,6 +184,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const failClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: failing,
@@ -250,7 +261,10 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('does not upload parts when aborted while startLargeFile is in flight', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let startSeen!: () => void
     let releaseStart!: () => void
@@ -282,6 +296,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const raceClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -316,7 +331,10 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('passes the abort signal to stalled startLargeFile requests', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let startSeen!: () => void
     const startSeenPromise = new Promise<void>((resolve) => {
@@ -334,6 +352,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const startClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -359,7 +378,10 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('passes per-call retry overrides to start, part, and finish requests', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     const seenRetry = new Map<string, unknown>()
     const transport: HttpTransport = {
@@ -375,6 +397,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const retryClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -483,7 +506,10 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('passes abort signal to stalled finish and uses independent cleanup signal', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     const controller = new AbortController()
     let finishSeen!: () => void
@@ -507,6 +533,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const finishClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -537,7 +564,10 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('aborts an in-flight write-stream part request when the writer aborts', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let uploadSeen!: () => void
     const uploadSeenPromise = new Promise<void>((resolve) => {
@@ -562,6 +592,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const abortClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -612,7 +643,10 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('waits for in-flight write-stream parts before cancelling on abort', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     let uploadSeen!: () => void
     const uploadSeenPromise = new Promise<void>((resolve) => {
@@ -649,6 +683,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const abortClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -878,7 +913,10 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('does not cancel when finish response body is ambiguous', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 200_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 200_000,
+    })
     const inner = sim.transport()
     let cancelCalls = 0
     const ambiguousFinish: HttpTransport = {
@@ -895,6 +933,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const failClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: ambiguousFinish,
@@ -998,7 +1037,10 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('aborts a stalled in-flight part request when writer.abort() is called', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 200_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 200_000,
+    })
     const inner = sim.transport()
     const uploadPartStarted = Promise.withResolvers<AbortSignal>()
     const uploadPartAborted = Promise.withResolvers<void>()
@@ -1022,6 +1064,7 @@ describe('createWriteStream branch coverage', () => {
       },
     }
     const stalledClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,

@@ -3,7 +3,8 @@ import type { Bucket } from '../bucket.ts'
 import type { B2Client } from '../client.ts'
 import type { ContentSource } from '../streams/source.ts'
 import { BufferSource, StreamSource } from '../streams/source.ts'
-import { daysFromNow, deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
+import { daysFromNow, deterministicBytes, readStream } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
@@ -20,7 +21,7 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient({ sim: { customUploadTimestampsEnabled: true } }))
+    ;({ client } = await makeRemoteClient({ sim: { customUploadTimestampsEnabled: true } }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'plan-parts',
@@ -132,7 +133,7 @@ describe('uploadLargeFile cancellation', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
     bucket = await client.createBucket({ bucketName: 'cancel', bucketType: BucketType.AllPrivate })
   })
@@ -165,7 +166,7 @@ describe('uploadSmallFile edge cases', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient({ sim: { customUploadTimestampsEnabled: true } }))
+    ;({ client } = await makeRemoteClient({ sim: { customUploadTimestampsEnabled: true } }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'small-upload',
@@ -390,7 +391,7 @@ describe('Bucket.upload() routing', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
     bucket = await client.createBucket({ bucketName: 'routing', bucketType: BucketType.AllPrivate })
   })
@@ -443,7 +444,7 @@ describe('Bucket.upload() routing', () => {
     // (which the raw-client normalisation collapses to `null`).
     // A null contentSha1 here would mean we accidentally took the
     // multipart path at the boundary.
-    const { client: boundaryClient } = makeClient({
+    const { client: boundaryClient } = await makeRemoteClient({
       minimumPartSize: 100,
       recommendedPartSize: 100,
     })

@@ -2,14 +2,15 @@ import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { toContentSource } from '../streams/source.ts'
-import { makeClient, readStream } from '../test-utils/index.ts'
+import { readStream } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 
 const expected = new Uint8Array([1, 2, 3, 4])
 const expectedSha1 = createHash('sha1').update(expected).digest('hex')
 
 async function makeBucket() {
-  const { client } = makeClient()
+  const { client } = await makeRemoteClient()
   await client.authorize()
   return client.createBucket({ bucketName: 'chunk-ownership', bucketType: BucketType.AllPrivate })
 }

@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import type { B2Client } from '../client.ts'
 import { BufferSource } from '../streams/source.ts'
-import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
+import { deterministicBytes, readStream } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { uploadLargeFile } from './large.ts'
 
 /**
@@ -19,7 +20,7 @@ describe('uploadLargeFile (real multipart, data > minPartSize)', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
     bucket = await client.createBucket({ bucketName: 'multipart', bucketType: 'allPrivate' })
   })
@@ -107,7 +108,7 @@ describe('uploadLargeFile resume', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
     bucket = await client.createBucket({ bucketName: 'resume-test', bucketType: 'allPrivate' })
   })

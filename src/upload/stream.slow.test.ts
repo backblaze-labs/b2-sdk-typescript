@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
-import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
+import { deterministicBytes, readStream } from '../test-utils/index.ts'
+import { makeRemoteClient, resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 
 function chunkedReadable(data: Uint8Array, chunkSize: number): ReadableStream<Uint8Array> {
   let offset = 0
@@ -25,7 +25,7 @@ describe('B2Object.createWriteStream', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
     bucket = await client.createBucket({ bucketName: 'stream-upload', bucketType: 'allPrivate' })
   })
@@ -150,8 +150,9 @@ describe('B2Object.createWriteStream', () => {
     // close() sees pendingBytes === 0 (the "skip dispatchPart" branch).
     // Uses a small-part simulator so this control-flow test stays under the
     // ~60 s vitest IPC RPC budget when v8 coverage instrumentation is on.
-    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
     const smallClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: sim.transport(),
@@ -204,7 +205,7 @@ describe('B2Object.createWriteStream', () => {
     // non-retryable 400 bad_request. The streaming engine's `errored` latch
     // should fire, close() should cancel the started large file, and done
     // should reject. The bucket must end up with no orphan unfinished file.
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const failing: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
@@ -233,6 +234,7 @@ describe('B2Object.createWriteStream', () => {
       },
     }
     const failClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: failing,
@@ -309,8 +311,9 @@ describe('B2Object.createWriteStream', () => {
     // small-part simulator so the test stays under the ~60 s vitest IPC
     // RPC budget when v8 coverage instrumentation is on — the backpressure
     // path is what we're testing, not 5 MB part hashing.
-    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({ minimumPartSize: 100_000 })
     const smallClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: sim.transport(),
@@ -376,7 +379,7 @@ describe('B2Object.createWriteStream', () => {
     // cancelLargeFile as best-effort cleanup. Inject a failure on
     // b2_cancel_large_file too; the engine should swallow it and still
     // reject done with the original error.
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const failing: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
@@ -406,6 +409,7 @@ describe('B2Object.createWriteStream', () => {
       },
     }
     const failClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: failing,
@@ -437,7 +441,7 @@ describe('B2Object.createWriteStream', () => {
     // Start a large file by writing a full part, then abort the writer.
     // Make cancelLargeFile fail; the abort() hook should swallow the
     // cleanup error and still reject done with the abort reason.
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const failing: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
@@ -466,6 +470,7 @@ describe('B2Object.createWriteStream', () => {
       },
     }
     const failClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: failing,
@@ -497,7 +502,7 @@ describe('B2Object.createWriteStream', () => {
     // fail asynchronously (so `errored` is latched), then close() the
     // writer directly. close() must hit its `if (errored) throw errored`
     // guard, cancel the started large file, and reject done.
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const failing: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
@@ -526,6 +531,7 @@ describe('B2Object.createWriteStream', () => {
       },
     }
     const failClient = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       transport: failing,

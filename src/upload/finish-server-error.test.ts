@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Error, FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
 import { deterministicBytes, readStream } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import type { CleanupFailureEvent } from './cancel.ts'
 
@@ -26,7 +26,10 @@ function errorResponse(status: number): HttpResponse {
 
 describe('finish response classification', () => {
   it.each([500, 503, 599])('keeps a committed file after a finish %i response', async (status) => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     const requests: string[] = []
     const transport: HttpTransport = {
@@ -41,6 +44,7 @@ describe('finish response classification', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
@@ -73,7 +77,10 @@ describe('finish response classification', () => {
   })
 
   it('cancels an unfinished file after a definite 400 finish rejection', async () => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const sim = await resetRemoteSimulator({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
     const inner = sim.transport()
     const requests: string[] = []
     const transport: HttpTransport = {
@@ -83,6 +90,7 @@ describe('finish response classification', () => {
       },
     }
     const client = new B2Client({
+      realm: sim.realm,
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport,
