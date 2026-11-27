@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
-import { B2Simulator } from '../simulator/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { bucketId } from '../types/ids.ts'
@@ -156,14 +156,14 @@ describe('FileAccountInfo', () => {
   })
 
   it('round-trips authorization through disk', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const accountInfo1 = new FileAccountInfo(storePath)
     await accountInfo1.load() // empty initially
 
     const client1 = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
-      realm: 'http://127.0.0.1',
+      realm: sim.realm,
       transport: sim.transport(),
       accountInfo: accountInfo1,
     })
@@ -185,7 +185,7 @@ describe('FileAccountInfo', () => {
     const client2 = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
-      realm: 'http://127.0.0.1',
+      realm: sim.realm,
       transport: sim.transport(),
       accountInfo: accountInfo2,
     })
@@ -255,11 +255,12 @@ describe('FileAccountInfo', () => {
   })
 
   it('clear() wipes both memory and disk state', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const accountInfo = new FileAccountInfo(storePath)
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: sim.transport(),
       accountInfo,
     })
@@ -276,11 +277,12 @@ describe('FileAccountInfo', () => {
   })
 
   it('writes the cache file with owner-only permissions on POSIX platforms', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const accountInfo = new FileAccountInfo(storePath)
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: sim.transport(),
       accountInfo,
     })
@@ -341,11 +343,12 @@ describe('FileAccountInfo', () => {
     await writeFile(storePath, '{"stale":true}', { encoding: 'utf8', mode: 0o666 })
     await chmod(storePath, 0o666)
 
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const accountInfo = new FileAccountInfo(storePath)
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: sim.transport(),
       accountInfo,
     })
@@ -359,7 +362,7 @@ describe('FileAccountInfo', () => {
       realmUrl?: string
     }
     expect(onDisk.auth?.accountId ?? onDisk.accountId).toBe('sim_account_0001')
-    expect(onDisk._b2sdk?.realmUrl).toBe('https://api.backblazeb2.com')
+    expect(onDisk._b2sdk?.realmUrl).toBe(sim.realm)
     expect(onDisk._b2sdk?.applicationKeyId).toBe('test-key-id')
     expect(await readdir(tempDir)).toEqual(['auth.json'])
 
@@ -369,11 +372,12 @@ describe('FileAccountInfo', () => {
   })
 
   it('writes auth at the top level so older readers can re-use the cache', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const accountInfo = new FileAccountInfo(storePath)
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: sim.transport(),
       accountInfo,
     })
@@ -386,17 +390,18 @@ describe('FileAccountInfo', () => {
     const oldReader = new InMemoryAccountInfo()
     oldReader.setAuth(onDisk)
 
-    expect(onDisk._b2sdk?.realmUrl).toBe('https://api.backblazeb2.com')
+    expect(onDisk._b2sdk?.realmUrl).toBe(sim.realm)
     expect(onDisk._b2sdk?.applicationKeyId).toBe('test-key-id')
     expect(oldReader.getApiUrl()).toBe(accountInfo.getApiUrl())
   })
 
   it('persists across multiple setAuth calls', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const accountInfo = new FileAccountInfo(storePath)
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: sim.transport(),
       accountInfo,
     })
@@ -423,7 +428,7 @@ describe('FileAccountInfo', () => {
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       realm: 'staging',
-      transport: new B2Simulator().transport(),
+      transport: (await resetRemoteSimulator()).transport(),
       accountInfo,
     })
 
@@ -465,7 +470,7 @@ describe('FileAccountInfo', () => {
       const client = new B2Client({
         applicationKeyId: 'test-key-id',
         applicationKey: 'test-key',
-        transport: new B2Simulator().transport(),
+        transport: (await resetRemoteSimulator()).transport(),
         accountInfo,
       })
 
@@ -519,7 +524,7 @@ describe('FileAccountInfo', () => {
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       realm: 'staging',
-      transport: new B2Simulator().transport(),
+      transport: (await resetRemoteSimulator()).transport(),
       accountInfo,
     })
 
@@ -550,7 +555,7 @@ describe('FileAccountInfo', () => {
     const client = new B2Client({
       applicationKeyId: 'restricted-key-id',
       applicationKey: 'test-key',
-      transport: new B2Simulator().transport(),
+      transport: (await resetRemoteSimulator()).transport(),
       accountInfo,
     })
 
@@ -578,7 +583,7 @@ describe('FileAccountInfo', () => {
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       realm: 'staging',
-      transport: new B2Simulator().transport(),
+      transport: (await resetRemoteSimulator()).transport(),
       accountInfo: stagingAccountInfo,
     })
 
@@ -590,7 +595,7 @@ describe('FileAccountInfo', () => {
     const productionClient = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
-      transport: new B2Simulator().transport(),
+      transport: (await resetRemoteSimulator()).transport(),
       accountInfo: productionAccountInfo,
     })
 
@@ -690,7 +695,7 @@ describe('FileAccountInfo', () => {
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       realm: 'staging',
-      transport: new B2Simulator().transport(),
+      transport: (await resetRemoteSimulator()).transport(),
       accountInfo,
     })
 
@@ -725,7 +730,7 @@ describe('FileAccountInfo', () => {
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       realm: 'https://auth.custom.example',
-      transport: new B2Simulator().transport(),
+      transport: (await resetRemoteSimulator()).transport(),
       accountInfo,
     })
 
@@ -842,7 +847,7 @@ describe('FileAccountInfo', () => {
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
       realm: 'https://auth.custom.example',
-      transport: new B2Simulator().transport(),
+      transport: (await resetRemoteSimulator()).transport(),
       accountInfo,
     })
 
@@ -896,11 +901,12 @@ describe('FileAccountInfo', () => {
   })
 
   it('delegates every AccountInfo getter to the in-memory backing', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const accountInfo = new FileAccountInfo(storePath)
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: sim.transport(),
       accountInfo,
     })
@@ -931,11 +937,12 @@ describe('FileAccountInfo', () => {
   })
 
   it('delegates the upload URL pool methods to the in-memory backing', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const accountInfo = new FileAccountInfo(storePath)
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: sim.transport(),
       accountInfo,
     })

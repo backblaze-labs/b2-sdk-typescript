@@ -22,8 +22,8 @@ import {
   redactGetUploadPartUrlResponse,
   redactGetUploadUrlResponse,
 } from './response-redaction.ts'
-import { B2Simulator } from './simulator/index.ts'
 import { jsonResponse } from './test-utils/index.ts'
+import { resetRemoteSimulator } from './test-utils/remote-simulator.ts'
 import type { AuthorizeAccountResponse } from './types/auth.ts'
 import { type BucketInfo, BucketType } from './types/bucket.ts'
 import { type AuthToken, bucketId, largeFileId, partnerToken } from './types/ids.ts'
@@ -38,10 +38,11 @@ const BID = bucketId('diagnostic-bucket-id')
 const entry = { uploadUrl: 'https://pod.backblaze.com/upload', authorizationToken: UPLOAD_TOKEN }
 
 async function fixture() {
-  const sim = new B2Simulator()
+  const sim = await resetRemoteSimulator()
   const seed = new B2Client({
     applicationKeyId: 'key-id',
     applicationKey: APP_KEY,
+    realm: sim.realm,
     transport: sim.transport(),
   })
   const auth: AuthorizeAccountResponse = {
@@ -87,7 +88,14 @@ async function fixture() {
     },
   })
   const bucket = new Bucket(client, info, DEFAULT_RETRY_OPTIONS)
-  return { auth, store, client, bucket, object: bucket.file('diagnostic.txt') }
+  return {
+    auth,
+    store,
+    client,
+    bucket,
+    object: bucket.file('diagnostic.txt'),
+    realm: sim.realm,
+  }
 }
 
 function assertNoSecrets(rendered: string): void {
@@ -357,7 +365,7 @@ describe('credential redaction JSON and spread', () => {
   })
 
   it('client summary isolates a custom enumerable AccountInfo', async () => {
-    const { auth } = await fixture()
+    const { auth, realm } = await fixture()
     const store = {
       auth,
       getAuth() {
@@ -377,7 +385,9 @@ describe('credential redaction JSON and spread', () => {
       credentials: APPLICATION_KEY_REDACTED,
       realm: 'https://api.backblazeb2.com/',
       authorized: true,
-      urlGuardAllowedSuffixes: ['backblaze.com', 'backblazeb2.com'],
+      // backblaze.com plus the host of the authorize answer's URLs, all on the
+      // simulator's loopback host.
+      urlGuardAllowedSuffixes: [new URL(realm).hostname, 'backblaze.com'],
     })
   })
 
@@ -658,23 +668,31 @@ describe('credential redaction JSON and spread', () => {
     poolTokens(store)
     const pool = new UploadUrlPool()
     pool.checkin('bucket', entry)
-    const sim = new B2Simulator({ partnerAuthorize: true })
+    const sim = await resetRemoteSimulator({ partnerAuthorize: true })
     const partnerStore = new InMemoryPartnerAccountInfo()
+    // The standalone simulator's realm is a loopback http origin, which the
+    // Partner authorizer accepts only as an explicitly allowed custom realm.
     const partner = new PartnerClient({
       masterKeyId: 'key-id',
       masterKey: APP_KEY,
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       partnerAccountInfo: partnerStore,
       transport: sim.transport(),
     })
     const partnerAuth = await new PartnerClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       transport: sim.transport(),
     }).authorize()
     partnerStore.setAuth({ ...partnerAuth, authorizationToken: partnerToken(ACCOUNT_TOKEN) })
     const backup = new BackupClient({
       masterKeyId: 'key-id',
       masterKey: APP_KEY,
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       partnerAccountInfo: partnerStore,
       transport: sim.transport(),
     })

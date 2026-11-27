@@ -2,8 +2,8 @@ import { inspect } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import type { HttpRequest, UrlGuardedTransport } from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { jsonResponse } from '../test-utils/index.ts'
+import { resetRemoteSimulator } from '../test-utils/remote-simulator.ts'
 import { accountId, applicationKeyId, groupId, partnerToken } from '../types/ids.ts'
 import { PartnerCapability, Region } from '../types/partner.ts'
 import { PartnerClient } from './client.ts'
@@ -60,9 +60,14 @@ describe('Partner Node diagnostics', () => {
   })
 
   it('redacts reserve trial application keys through util.inspect', async () => {
-    const sim = new B2Simulator({ partnerAuthorize: true })
-    const raw = new PartnerRawClient({ transport: sim.transport() })
-    const auth = await raw.authorizePartner('master-key-id', 'master-key')
+    const sim = await resetRemoteSimulator({ partnerAuthorize: true })
+    // The standalone simulator's realm is a loopback http origin, which the
+    // Partner client accepts only as an explicitly allowed custom realm.
+    const raw = new PartnerRawClient({
+      transport: sim.transport(),
+      allowCustomAuthorizeRealm: true,
+    })
+    const auth = await raw.authorizePartner('master-key-id', 'master-key', sim.realm)
     if (auth.groupsApiUrl === undefined) throw new Error('expected simulator Partner API URL')
 
     const result = await raw.reserveTrialCreateAccount(auth.groupsApiUrl, auth.authorizationToken, {

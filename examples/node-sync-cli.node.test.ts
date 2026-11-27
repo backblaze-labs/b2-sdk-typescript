@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { resetRemoteSimulator } from '../src/test-utils/remote-simulator.ts'
 
 const repoRoot = resolve(import.meta.dirname, '..')
 const preload = pathToFileURL(
@@ -16,12 +17,15 @@ interface RunResult {
   readonly stderr: string
 }
 
-function run(
+async function run(
   script: string,
   args: readonly string[],
   env: Record<string, string>,
   timeoutMs = 30_000,
 ): Promise<RunResult> {
+  // Each example process starts from an empty simulator, as it did when the
+  // preload built an in-memory one.
+  const sim = await resetRemoteSimulator()
   return new Promise((resolvePromise) => {
     const child = spawn(
       process.execPath,
@@ -32,6 +36,8 @@ function run(
           PATH: process.env['PATH'] ?? '',
           TSX_TSCONFIG_PATH: join(repoRoot, 'examples/tsconfig.json'),
           EXAMPLE_SIM_SOURCE: '1',
+          B2SIM_API_URL: sim.realm,
+          B2SIM_CONTROL_URL: sim.controlUrl,
           ...env,
         },
       },

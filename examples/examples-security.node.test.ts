@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { PartnerClient } from '../src/partner/client.ts'
 import { APPLICATION_KEY_REDACTED } from '../src/partner/redaction.ts'
-import { B2Simulator } from '../src/simulator/index.ts'
+import { resetRemoteSimulator } from '../src/test-utils/remote-simulator.ts'
 import type {
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResult,
@@ -136,10 +136,14 @@ describe('Partner examples secret handling', () => {
     const request = [{ email: 'sdk-trial@example.com', term: 7, storage: 1 }] satisfies readonly [
       ReserveTrialCreateAccountRequestEntry,
     ]
-    const sim = new B2Simulator({ partnerAuthorize: true })
+    const sim = await resetRemoteSimulator({ partnerAuthorize: true })
+    // The standalone simulator's realm is a loopback http origin, which the
+    // Partner client accepts only as an explicitly allowed custom realm.
     const partner = new PartnerClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
+      realm: sim.realm,
+      allowCustomAuthorizeRealm: true,
       transport: sim.transport(),
       retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
     })
