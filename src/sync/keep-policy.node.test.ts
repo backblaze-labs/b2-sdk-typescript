@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BufferSource } from '../streams/source.ts'
-import { makeClient } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { B2Folder } from './scanners/b2.ts'
 import { LocalFolder } from './scanners/local.ts'
@@ -14,7 +14,7 @@ describe('synchronize keep-days validation', () => {
   it('rejects omitted keepDays without deleting a just-uploaded orphan', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-keep-days-'))
     try {
-      const { client } = makeClient()
+      const { client } = await makeRemoteClient()
       await client.authorize()
       const bucket = await client.createBucket({
         bucketName: 'sync-keep-days',

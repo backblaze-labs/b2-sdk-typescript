@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type ContentSource, FileSource } from '../streams/source.ts'
-import { daysFromNow, deterministicBytes, makeClient } from '../test-utils/index.ts'
+import { daysFromNow, deterministicBytes } from '../test-utils/index.ts'
+import { makeRemoteClient } from '../test-utils/remote-simulator.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion, type ListedFileVersion } from '../types/file.ts'
@@ -7089,7 +7090,10 @@ describe('synchronize', () => {
           const original = deterministicBytes(250)
           await writeFile(filePath, original)
 
-          const { client } = makeClient({ minimumPartSize: 100, recommendedPartSize: 100 })
+          const { client } = await makeRemoteClient({
+            minimumPartSize: 100,
+            recommendedPartSize: 100,
+          })
           await client.authorize()
           const realBucket = await client.createBucket({
             bucketName: 'sync-mutated-upload',
