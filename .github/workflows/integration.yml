@@ -1,8 +1,8 @@
 name: Integration (real B2)
 
-# Runs the integration suite against a real Backblaze B2 account. Gated on
-# repo-level secrets being present, so the job is automatically skipped on
-# pull requests from forks (which can't see secrets).
+# Runs the integration suite against a real Backblaze B2 account on the weekly
+# schedule or by explicit manual dispatch. Pull requests use B2 Simulator in
+# simulator-integration.yml and never receive live credentials.
 #
 # Required repo secrets:
 #   B2_APPLICATION_KEY_ID
@@ -23,9 +23,9 @@ name: Integration (real B2)
 #   B2_INTEGRATION_ALLOW_IRREVERSIBLE_PARTNER_TRIAL
 #   B2_INTEGRATION_PARTNER_TRIAL_RECONCILIATION_OWNER
 # Destructive Partner and Backup allow-flags are forwarded only for
-# workflow_dispatch on the first Node matrix leg, so push/schedule runs stay
+# workflow_dispatch on the first Node matrix leg, so scheduled runs stay
 # read-only.
-# Optional dedicated credentials for the trusted application-key lifecycle job:
+# Required dedicated credentials for the trusted application-key lifecycle job:
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY_ID
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY
 # Optional if the key-management credential cannot list or create buckets:
@@ -38,14 +38,10 @@ name: Integration (real B2)
 # Recommended: scope the key to a dedicated test account. The tests create
 # ephemeral `sdk-it-<timestamp>` buckets and clean up after themselves (including
 # a defensive sweep at startup for stale `sdk-it-*` / legacy `sdk-test-*` buckets
-# from previously-crashed runs). Same-repo runs fail if these secrets are absent
+# from previously-crashed runs). Runs fail if these secrets are absent
 # so scheduled live-B2 evidence cannot accidentally become an all-skipped run.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   schedule:
     # Weekly Monday 06:00 UTC. Catches drift from B2 API changes that the
     # in-memory simulator wouldn't see.
@@ -82,9 +78,7 @@ jobs:
     name: Integration (Node ${{ matrix.node-version }})
     needs: changes
     runs-on: ubuntu-latest
-    # Fork PRs can't access secrets; skip rather than fail loudly. Same-repo
-    # PRs and pushes to main do run.
-    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]')
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       # Run matrix entries one at a time. The integration tests share a single
@@ -199,12 +193,8 @@ jobs:
           B2_KEY_MANAGEMENT_BUCKET_ID: ${{ secrets.B2_KEY_MANAGEMENT_BUCKET_ID }}
           B2_KEY_MANAGEMENT_REQUIRE_CREDENTIALS: '1'
         run: |
-          if [ -z "$B2_KEY_MANAGEMENT_APPLICATION_KEY_ID" ] && [ -z "$B2_KEY_MANAGEMENT_APPLICATION_KEY" ]; then
-            echo "::notice::B2 key-management secrets are not configured; skipping application-key lifecycle tests."
-            exit 0
-          fi
           if [ -z "$B2_KEY_MANAGEMENT_APPLICATION_KEY_ID" ] || [ -z "$B2_KEY_MANAGEMENT_APPLICATION_KEY" ]; then
-            echo "::error::B2_KEY_MANAGEMENT_APPLICATION_KEY_ID / B2_KEY_MANAGEMENT_APPLICATION_KEY must be configured together."
+            echo "::error::B2_KEY_MANAGEMENT_APPLICATION_KEY_ID / B2_KEY_MANAGEMENT_APPLICATION_KEY are required."
             exit 1
           fi
           pnpm exec vitest run --config vitest.integration.ts tests/integration/keys.test.ts
@@ -217,7 +207,7 @@ jobs:
     # Run after the integration suite passes so a wire-format break shows up
     # as an integration failure (sharp signal) rather than a confusing
     # example-script failure.
-    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]')
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       # Same reason as the integration job: real-examples uses a separate
@@ -255,14 +245,14 @@ jobs:
   integration-result:
     name: Integration result
     needs: [changes, integration, partner-backup-live-contracts, key-lifecycle, real-examples]
-    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - name: Check job results
         env:
           CODE_CHANGED: ${{ needs.changes.outputs.code }}
-          RUN_REAL_B2: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-          RUN_MAIN_ONLY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          RUN_REAL_B2: "true"
+          RUN_MAIN_ONLY: ${{ github.ref == 'refs/heads/main' }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
           PARTNER_BACKUP_LIVE_CONTRACTS_RESULT: ${{ needs.partner-backup-live-contracts.result }}

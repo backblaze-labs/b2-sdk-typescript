@@ -14,7 +14,7 @@ import { Capability, type Capability as CapabilityValue } from '../../src/types/
 import { type ApplicationKeyId, type BucketId, bucketId } from '../../src/types/ids.ts'
 import type { ApplicationKey, CreateKeyOptions, FullApplicationKey } from '../../src/types/key.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
-import { liveRealmOptions } from '../helpers/live-b2.ts'
+import { liveRealmBypassesHostGuard, liveRealmOptions } from '../helpers/live-b2.ts'
 
 const keyManagementKeyId = env('B2_KEY_MANAGEMENT_APPLICATION_KEY_ID')
 const keyManagementAppKey = env('B2_KEY_MANAGEMENT_APPLICATION_KEY')
@@ -59,6 +59,8 @@ const namePrefix = `keys/${runLabel()}/`
 const keyDurationSeconds = 5 * 60
 
 let client: B2Client
+let simulatorAdminClient: B2Client | undefined
+let simulatorKeyManagementKeyId: ApplicationKeyId | undefined
 let scopedBucketId: BucketId
 let createdBucket: Bucket | undefined
 let missingScopeableCapability: CapabilityValue | undefined
@@ -66,19 +68,45 @@ const createdKeyIds = new Set<ApplicationKeyId>()
 
 describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
   beforeAll(async () => {
-    client = new B2Client({
+    const credentialClient = new B2Client({
       applicationKeyId: keyId,
       applicationKey: appKey,
       ...liveRealmOptions,
     })
-    await client.authorize()
+    await credentialClient.authorize()
+
+    if (liveRealmBypassesHostGuard) {
+      simulatorAdminClient = credentialClient
+      const keyManagementKey = await simulatorAdminClient.createKey({
+        keyName: makeKeyName('manager'),
+        capabilities: requiredKeyCapabilities,
+        validDurationInSeconds: keyDurationSeconds,
+      })
+      simulatorKeyManagementKeyId = keyManagementKey.applicationKeyId
+      client = new B2Client({
+        applicationKeyId: keyManagementKey.applicationKeyId,
+        applicationKey: keyManagementKey.applicationKey,
+        ...liveRealmOptions,
+      })
+      await client.authorize()
+    } else {
+      client = credentialClient
+    }
 
     requireCapabilities('application-key lifecycle', requiredKeyCapabilities)
     missingScopeableCapability = subsetRejectionCandidateCapabilities.find(
       (capability) => !client.hasCapabilities([capability]).ok,
     )
 
-    scopedBucketId = await resolveScopedBucketId()
+    if (simulatorAdminClient !== undefined) {
+      createdBucket = await simulatorAdminClient.createBucket({
+        bucketName: makeBucketName(),
+        bucketType: 'allPrivate',
+      })
+      scopedBucketId = createdBucket.id
+    } else {
+      scopedBucketId = await resolveScopedBucketId()
+    }
   })
 
   afterAll(async () => {
@@ -102,6 +130,19 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
         await createdBucket.delete()
       } catch (err) {
         cleanupErrors.push(err)
+      }
+    }
+
+    if (simulatorAdminClient !== undefined && simulatorKeyManagementKeyId !== undefined) {
+      try {
+        await simulatorAdminClient.deleteKey(simulatorKeyManagementKeyId)
+        simulatorKeyManagementKeyId = undefined
+      } catch (err) {
+        if (isAlreadyDeletedKeyError(err)) {
+          simulatorKeyManagementKeyId = undefined
+        } else {
+          cleanupErrors.push(err)
+        }
       }
     }
 
@@ -148,10 +189,10 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
     await expect(getListedKeyById(created.applicationKeyId)).resolves.toBeUndefined()
   })
 
-  it('rejects requested capabilities outside the creator grant with 400', async (ctx) => {
+  it('rejects requested capabilities outside the creator grant with 400', async () => {
+    expect(missingScopeableCapability).toBeDefined()
     if (missingScopeableCapability === undefined) {
-      ctx.skip('key-management credential has every checked file-scopeable capability')
-      return
+      throw new Error('key-management credential must omit a file-scopeable capability')
     }
 
     await expectCreateKeyRejectedWith400({

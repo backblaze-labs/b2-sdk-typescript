@@ -33,7 +33,7 @@ pnpm test
 | `pnpm lint:spelling` | Spell-check comments + docs with CSpell (config: `cspell.config.yaml`, project dictionary: `.cspell/project-words.txt`) |
 | `pnpm typecheck` | Run `tsc --noEmit` with full strictness |
 | `pnpm typecheck:examples` | Typecheck the cookbook examples against `src/` |
-| `pnpm test:integration` | Run integration tests against real B2 (local runs skip without credentials; same-repo CI requires them) |
+| `pnpm test:integration` | Run integration tests against real B2 locally (tests skip without credentials) |
 | `pnpm docs` | Generate TypeDoc API documentation under `./api-docs` |
 
 CI also runs `bun test src/` against the same test suite plus a per-engine browser matrix (Chromium / Firefox / WebKit). Avoid module-level mocking patterns (`vi.mock` with `importOriginal` / `vi.importActual`) that Bun's vitest-compat doesn't support: prefer dependency injection (see `RetryTransport`'s `sleepImpl` option).
@@ -51,9 +51,10 @@ canonical behavior explicit.
 
 `pnpm test:integration` is the live Backblaze B2 evidence path. Local runs skip
 without `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` so contributors can work
-offline. The GitHub `Integration (real B2)` workflow is stricter for same-repo
-pushes, same-repo PRs, weekly scheduled runs, and `workflow_dispatch`: missing
-secrets fail the job, while fork PRs skip before secrets are read. The integration
+offline. Pull requests run the storage and application-key integration files against the private B2
+Simulator and fail if that mandatory run cannot start. The GitHub `Integration
+(real B2)` workflow runs weekly and through `workflow_dispatch`; missing live
+secrets fail the job. The integration
 setup logs each live setup step (`authorize`, `list buckets`, stale bucket
 cleanup, and test bucket creation) with timings and step-specific timeouts so
 credential, permission, cleanup, and network failures are diagnosable.

@@ -396,7 +396,6 @@ jobs:
 
   # Real-B2 integration tests live in their own workflow (integration.yml),
   # which runs the Node 22.22.2 + 24 matrix sequentially + the real-examples
-  # follow-up + a weekly schedule + workflow_dispatch. Having a duplicate
-  # `pnpm test:integration` job here would race that workflow for the same
-  # `sdk-test-*` buckets on every push to main, because GitHub Actions
-  # `concurrency:` groups do not span workflows.
+  # follow-up on a weekly schedule or workflow_dispatch. Pull requests run the
+  # storage and application-key integration files against B2 Simulator in
+  # simulator-integration.yml.
