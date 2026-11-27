@@ -303,6 +303,14 @@ if (releasePolicyJob !== '') {
       'release.yml release-policy must check for a recent green live B2 run (node scripts/verify-live-b2-run.mjs).',
     )
   }
+  if (
+    !releasePolicyJob.includes(`RELEASE_COMMIT: \${{ steps.signature.outputs.commit }}`) ||
+    !releasePolicyJob.includes('node scripts/verify-live-b2-run.mjs "$RELEASE_COMMIT"')
+  ) {
+    errors.push(
+      'release.yml release-policy must pass the inspected release commit to the live B2 run check.',
+    )
+  }
   if (!/^ {6}actions: read\b/m.test(releasePolicyJob)) {
     errors.push('release.yml release-policy needs actions: read to check the live B2 run.')
   }

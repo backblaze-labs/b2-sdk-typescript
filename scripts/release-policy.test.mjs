@@ -766,11 +766,19 @@ test('release tag parsing accepts full release names and rejects other refs', as
   }
 })
 
-function liveRunsApi(runs, seen = []) {
+const releaseCommit = 'a'.repeat(40)
+const liveHead = 'b'.repeat(40)
+
+// GitHub API fixture: integration.yml runs plus the compare endpoint, which
+// says whether a run's head contains the release commit and is on main.
+function liveRunsApi(runs, { contains = true, onMain = true, seen = [] } = {}) {
   return async (path) => {
     seen.push(path)
     if (path.startsWith('repos/example/sdk/actions/workflows/integration.yml/runs?'))
       return { total_count: runs.length, workflow_runs: runs }
+    const compare = /^repos\/example\/sdk\/compare\/([^.]+)\.\.\.([0-9a-f]{40})$/.exec(path)
+    if (compare?.[1] === releaseCommit) return { status: contains ? 'ahead' : 'diverged' }
+    if (compare?.[1] === 'main') return { status: onMain ? 'behind' : 'diverged' }
     throw new Error(`unexpected request ${path}`)
   }
 }
@@ -780,38 +788,41 @@ const liveRun = (overrides = {}) => ({
   id: 1,
   event: 'schedule',
   head_branch: 'main',
+  head_sha: liveHead,
   status: 'completed',
   conclusion: 'success',
   created_at: '2026-11-23T06:00:00Z',
   html_url: 'https://github.com/example/sdk/actions/runs/1',
   ...overrides,
 })
-
-test('release requires the latest live B2 run on main to be green and recent', async () => {
+const check = async (runs, options = {}) => {
   const { checkLiveB2Run } = await import('./verify-live-b2-run.mjs')
-  const seen = []
-  const run = await checkLiveB2Run({
+  return checkLiveB2Run({
     repo: 'example/sdk',
+    commit: releaseCommit,
     now: liveNow,
-    api: liveRunsApi([liveRun()], seen),
+    api: liveRunsApi(runs, options),
   })
+}
+
+test('release requires the latest live B2 run on main to be green, recent and include the release', async () => {
+  const seen = []
+  const run = await check([liveRun()], { seen })
   assert.equal(run.id, 1)
   assert.match(seen[0], /[?&]branch=main\b/)
   assert.match(seen[0], /[?&]status=completed\b/)
+  assert.ok(seen.includes(`repos/example/sdk/compare/${releaseCommit}...${liveHead}`))
+  assert.ok(seen.includes(`repos/example/sdk/compare/main...${liveHead}`))
+  // The run may be on the release commit itself.
+  assert.equal((await check([liveRun({ head_sha: releaseCommit })])).id, 1)
 
   // A manual dispatch counts as evidence, as does a pre-#467 push run on main.
   for (const event of ['workflow_dispatch', 'push']) {
-    const ok = await checkLiveB2Run({
-      repo: 'example/sdk',
-      now: liveNow,
-      api: liveRunsApi([liveRun({ event })]),
-    })
-    assert.equal(ok.event, event)
+    assert.equal((await check([liveRun({ event })])).event, event)
   }
 })
 
 test('a failed, stale or missing live B2 run blocks the release', async () => {
-  const { checkLiveB2Run } = await import('./verify-live-b2-run.mjs')
   const cases = [
     [
       [liveRun({ id: 2, conclusion: 'failure', created_at: '2026-11-26T06:00:00Z' }), liveRun()],
@@ -823,41 +834,50 @@ test('a failed, stale or missing live B2 run blocks the release', async () => {
     [[liveRun({ event: 'pull_request' })], /no completed/i],
     [[liveRun({ head_branch: 'feature' })], /no completed/i],
   ]
-  for (const [runs, message] of cases) {
+  for (const [runs, message] of cases) await assert.rejects(check(runs), message)
+})
+
+test('a green live B2 run that predates the release commit blocks the release', async () => {
+  // Monday's run is green at A; a wire change merges as B on Tuesday; a tag at
+  // B on Wednesday must not ship on Monday's evidence.
+  await assert.rejects(check([liveRun()], { contains: false }), /does not include/)
+})
+
+test('a green run whose commit is not on main blocks the release', async () => {
+  // For example a dispatch on a tag named `main` that points elsewhere.
+  await assert.rejects(check([liveRun()], { onMain: false }), /not on main/)
+})
+
+test('the release commit must be a full commit SHA', async () => {
+  const { checkLiveB2Run } = await import('./verify-live-b2-run.mjs')
+  for (const commit of [undefined, '', 'main', 'abc123', `${releaseCommit}x`]) {
     await assert.rejects(
-      checkLiveB2Run({ repo: 'example/sdk', now: liveNow, api: liveRunsApi(runs) }),
-      message,
+      checkLiveB2Run({ repo: 'example/sdk', commit, now: liveNow, api: liveRunsApi([liveRun()]) }),
+      /commit SHA/,
     )
   }
 })
 
 test('a cancelled newer live B2 run does not hide the latest real result', async () => {
-  const { checkLiveB2Run } = await import('./verify-live-b2-run.mjs')
   const cancelled = liveRun({ id: 3, conclusion: 'cancelled', created_at: '2026-11-26T06:00:00Z' })
-  const green = await checkLiveB2Run({
-    repo: 'example/sdk',
-    now: liveNow,
-    api: liveRunsApi([cancelled, liveRun()]),
-  })
-  assert.equal(green.id, 1)
-  await assert.rejects(
-    checkLiveB2Run({
-      repo: 'example/sdk',
-      now: liveNow,
-      api: liveRunsApi([cancelled, liveRun({ conclusion: 'failure' })]),
-    }),
-    /failure/,
-  )
+  assert.equal((await check([cancelled, liveRun()])).id, 1)
+  await assert.rejects(check([cancelled, liveRun({ conclusion: 'failure' })]), /failure/)
 })
 
 test('live B2 run API failures do not pass the release', async () => {
   const { checkLiveB2Run } = await import('./verify-live-b2-run.mjs')
+  const runsOnly = liveRunsApi([liveRun()])
   for (const api of [
     async () => {
       throw new Error('unavailable')
     },
     async () => ({ message: 'Not Found' }),
+    // The runs are readable but the compare endpoint is not.
+    async (path) => (path.includes('/compare/') ? { message: 'Not Found' } : runsOnly(path)),
   ]) {
-    await assert.rejects(checkLiveB2Run({ repo: 'example/sdk', now: liveNow, api }), /UNVERIFIED/)
+    await assert.rejects(
+      checkLiveB2Run({ repo: 'example/sdk', commit: releaseCommit, now: liveNow, api }),
+      /UNVERIFIED/,
+    )
   }
 })

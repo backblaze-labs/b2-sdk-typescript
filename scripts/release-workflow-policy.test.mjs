@@ -269,3 +269,14 @@ test('the live B2 run check needs read access to Actions runs', async (t) => {
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /actions: read/)
 })
+
+test('the live B2 run check gets the inspected release commit', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    workflow.replace(
+      `RELEASE_COMMIT: \${{ steps.signature.outputs.commit }}`,
+      `RELEASE_COMMIT: \${{ github.sha }}`,
+    ),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /live B2.*commit|commit.*live B2/i)
+})

@@ -1,8 +1,10 @@
 // Release gate: pull requests test against the b2-simulator, and real B2 runs
 // only in integration.yml (weekly, or by workflow_dispatch). A release must not
 // ship on simulator evidence alone, so the latest completed live run on main
-// must be green and no older than MAX_AGE_DAYS. To release after a red or old
-// run, dispatch `Integration (real B2)` on main and wait for it to pass.
+// must be green, no older than MAX_AGE_DAYS, run on a commit that is on main,
+// and include the release commit (its head is that commit or a descendant).
+// To release, dispatch `Integration (real B2)` on main after the release commit
+// is on main, wait for it to pass, then tag or rerun the release workflow.
 import { spawnSync } from 'node:child_process'
 import { isEntry, repository } from './release-policy-common.mjs'
 
@@ -25,11 +27,15 @@ export async function githubJson(path, run = spawnSync) {
 
 export async function checkLiveB2Run({
   repo: input,
+  commit,
   now = Date.now(),
   api = githubJson,
   maxAgeDays = MAX_AGE_DAYS,
 }) {
   const repo = repository(input)
+  if (typeof commit !== 'string' || !/^[0-9a-f]{40}$/.test(commit)) {
+    throw new Error('The release commit SHA (40 hex characters) is required')
+  }
   let runs
   try {
     const page = await api(
@@ -65,12 +71,35 @@ export async function checkLiveB2Run({
       `Latest green live B2 run is older than ${maxAgeDays} days: ${where}; dispatch a new one`,
     )
   }
+  if (typeof latest.head_sha !== 'string' || !/^[0-9a-f]{40}$/.test(latest.head_sha)) {
+    throw new Error(`UNVERIFIED: live B2 run has no commit SHA: ${where}`)
+  }
+  // compare/A...B: `ahead` means B descends from A, `behind` that A descends
+  // from B, `identical` that they are the same commit.
+  const relation = async (base, head) => {
+    let status
+    try {
+      status = (await api(`repos/${repo}/compare/${base}...${head}`))?.status
+    } catch {}
+    if (!['identical', 'ahead', 'behind', 'diverged'].includes(status)) {
+      throw new Error('UNVERIFIED: commit ancestry could not be read')
+    }
+    return status
+  }
+  if (!['identical', 'behind'].includes(await relation('main', latest.head_sha))) {
+    throw new Error(`Latest live B2 run tested a commit that is not on main: ${where}`)
+  }
+  if (!['identical', 'ahead'].includes(await relation(commit, latest.head_sha))) {
+    throw new Error(
+      `Latest green live B2 run does not include release commit ${commit}: ${where}; dispatch \`Integration (real B2)\` on main and wait for it to pass`,
+    )
+  }
   return latest
 }
 
 if (isEntry(import.meta.url)) {
   try {
-    const run = await checkLiveB2Run({ repo: process.argv[2] })
+    const run = await checkLiveB2Run({ commit: process.argv[2], repo: process.argv[3] })
     console.log(`live-b2-run: ${run.html_url ?? run.id} succeeded at ${run.created_at}`)
   } catch (error) {
     console.error(error.message)

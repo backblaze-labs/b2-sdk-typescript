@@ -60,9 +60,9 @@ setup logs each live setup step (`authorize`, `list buckets`, stale bucket
 cleanup, and test bucket creation) with timings and step-specific timeouts so
 credential, permission, cleanup, and network failures are diagnosable.
 
-Release workflow success alone does not prove live B2 integration passed. Before
-cutting or trusting a release, confirm that the relevant commit also has a green
-`Integration (real B2)` run, or manually dispatch that workflow for the commit.
+The release workflow holds a release unless the latest `Integration (real B2)`
+run on `main` is green, recent and includes the release commit; dispatch that
+workflow on `main` after the release PR merges. See [RELEASE.md](RELEASE.md).
 
 Raw single-file integration fixtures use `tests/helpers/raw-upload.ts` to follow
 [B2's documented upload recovery](https://www.backblaze.com/docs/cloud-storage-upload-files-with-the-native-api):

@@ -286,17 +286,18 @@ pnpm pack --pack-destination /tmp && tar -tzf /tmp/backblaze-labs-b2-sdk-*.tgz |
 Pull requests run their tests against the b2-simulator; real B2 runs in the
 `Integration (real B2)` workflow, weekly and by `workflow_dispatch`. The release
 workflow does not run `pnpm test:integration`, but it holds the release unless
-the latest completed run of that workflow on `main` succeeded within the last 8
-days (cancelled runs are ignored). Check it before tagging:
+the latest completed run of that workflow on `main` (cancelled runs are ignored)
+succeeded within the last 8 days, ran on a commit that is on `main`, and
+includes the release commit (it ran on that commit or a later one). In practice:
+once the release PR has merged, dispatch `Integration (real B2)` on `main`, wait
+for it to pass, then check before tagging:
 
 ```bash
-pnpm release:live-b2
+pnpm release:live-b2 <release-commit-sha>
 ```
 
-If it reports a failed or old run, dispatch `Integration (real B2)` on `main`,
-wait for it to pass, then tag (or rerun the release workflow). The gate checks
-recency, not the exact release commit, so for a release with risky wire changes
-dispatch the live workflow on the release commit first.
+If it reports a failed, old or earlier run, dispatch the workflow on `main`
+again, wait for it to pass, then tag (or rerun the release workflow).
 
 The tarball should contain `dist/` (`.js` / `.cjs` / `.d.ts` / `.d.cts` per entry), `README.md`, `LICENSE`, `CHANGELOG.md`, and **nothing** from `src/`, `coverage/`, or `node_modules/`. `pnpm run verify:exports` already asserts the dual-format type resolution.
 
@@ -351,7 +352,8 @@ Pushing the tag fires [`.github/workflows/release.yml`](.github/workflows/releas
 
 The release workflow stays packaging-focused. The separate
 `Integration (real B2)` workflow is the live-service signal (weekly and manual);
-the release only checks that its latest run on `main` is green and recent.
+the release only checks that its latest run on `main` is green, recent and
+includes the release commit.
 
 Then confirm:
 
@@ -450,7 +452,7 @@ fragments, and the explicit preview keeps them with `--keep`. The eventual stabl
 ## Checklist (TL;DR)
 
 - [ ] Intended work and release PR belong to the exact `vX.Y.Z` milestone
-- [ ] Main CI is green and `pnpm release:live-b2` passes (latest live B2 run on main is green and recent)
+- [ ] Main CI is green and `pnpm release:live-b2 <sha>` passes (latest live B2 run on main is green, recent and includes the release commit)
 - [ ] Changie fragments cover the changes and explain compatibility/migration
 - [ ] pnpm/npm selects the version without creating a tag during PR preparation
 - [ ] `pnpm install --frozen-lockfile` and `pnpm run verify` pass
