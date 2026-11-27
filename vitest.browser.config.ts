@@ -1,5 +1,6 @@
 import { playwright } from '@vitest/browser-playwright'
 import { defineConfig } from 'vitest/config'
+import { b2SimulatorCommands } from './src/test-utils/remote-simulator-commands.ts'
 
 /**
  * Vitest browser-mode configuration.
@@ -37,7 +38,12 @@ export default defineConfig({
     // round-trip overhead between the page and the test runner.
     testTimeout: 180_000,
     hookTimeout: 60_000,
+    // Tests migrated to the standalone b2-simulator reach it through these
+    // commands (see src/test-utils/remote-simulator-commands.ts); the setup
+    // file stops each test file's server when the file is done.
+    setupFiles: ['src/test-utils/remote-simulator-browser-setup.ts'],
     browser: {
+      commands: b2SimulatorCommands,
       enabled: true,
       provider: playwright(),
       // Headless in CI; toggle via VITEST_BROWSER_HEADLESS=false for local debugging.

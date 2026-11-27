@@ -43,9 +43,9 @@ dependencies in core. Built with Vite library mode + Vitest.
 
 ```bash
 pnpm build           # Vite library mode: ESM + CJS + DTS for all 12 export entries
-pnpm test            # Vitest: src/**/*.test.ts against the in-memory B2Simulator (Node)
+pnpm test            # Vitest: src/**/*.test.ts against the in-memory B2Simulator, migrated files against the standalone b2-simulator (Node)
 pnpm test:watch      # Vitest in watch mode
-pnpm test:coverage   # Vitest v8 coverage (gates: 97% statements, 98% lines, 97% functions, 92% branches)
+pnpm test:coverage   # Vitest v8 coverage (gates: 97% statements, 98% lines, 97% functions, 92% branches for the SDK; the embedded src/simulator/ has a separate gate set lower than the SDK's for statements, lines and branches)
 pnpm test:browser    # Vitest browser mode: real Chromium/Firefox/WebKit via Playwright
 pnpm lint            # Biome lint + format check (gate is --error-on-warnings)
 pnpm lint:fix        # Biome auto-fix
@@ -86,13 +86,18 @@ per-engine browser matrix.
 
 See the [testing guide](docs/testing.md) for test levels and evidence.
 
-Tests use the in-memory `B2Simulator` (no network):
+Most tests use the in-memory `B2Simulator` (no network):
 
 ```ts
 const sim = new B2Simulator()
 const client = new B2Client({ applicationKeyId: 'test-key-id', applicationKey: 'test-key', transport: sim.transport() })
 await client.authorize()
 ```
+
+Files are migrating to the standalone b2-simulator server: they use
+`makeRemoteClient` / `resetRemoteSimulator` from `src/test-utils/remote-simulator.ts`
+(run `pnpm run simulator:fetch` once). How it works and the migration recipe:
+[CONTRIBUTING.md](CONTRIBUTING.md#tests-against-the-standalone-simulator).
 
 | Pattern | Runs in |
 |---|---|

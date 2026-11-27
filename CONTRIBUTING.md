@@ -22,10 +22,10 @@ pnpm test
 | Command | Purpose |
 |---|---|
 | `pnpm build` | Build ESM + CJS + DTS via Vite library mode |
-| `pnpm test` | Run tests (Vitest, uses in-memory simulator) |
+| `pnpm test` | Run tests (Vitest; in-memory simulator, and the standalone b2-simulator for migrated files: run `pnpm run simulator:fetch` once) |
 | `pnpm test:known-defects` | Run the known-defect tests in `tests/known-defects/` (they assert correct behaviour that is not implemented yet, so this command exits non-zero until the defects are fixed; it runs `pnpm build` first because the example-program tests spawn the built package). See `tests/known-defects/README.md` |
 | `pnpm test:watch` | Run tests in watch mode |
-| `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 92% branches) |
+| `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 92% branches for the SDK; the embedded `src/simulator/` has a separate gate set lower than the SDK's for statements, lines and branches, in `vitest.coverage.config.ts`) |
 | `pnpm test:browser` | Run the test suite in real Chromium/Firefox/WebKit via Playwright |
 | `pnpm lint` | Check formatting + lint rules (Biome, `--error-on-warnings` — any warning fails) |
 | `pnpm lint:fix` | Auto-fix lint and formatting issues |
@@ -40,7 +40,8 @@ CI also runs `bun test src/` against the same test suite plus a per-engine brows
 
 ### Simulator vs real B2
 
-`pnpm test` uses the in-memory `B2Simulator`: it is fast, deterministic, and
+`pnpm test` uses the in-memory `B2Simulator` (files migrated to the standalone
+b2-simulator excepted; see below): it is fast, deterministic, and
 models the SDK's supported wire contract. It is not a promise to preserve every
 historical Backblaze B2 behavior. During v3/v4 transition windows, the simulator
 should accept both routes only where the SDK intentionally supports both and the
@@ -69,6 +70,89 @@ recovery policy; deterministic request errors and unreadable successful response
 still fail. It logs retry counts/status only. Metadata, encryption and byte
 assertions remain in the live tests. Credential-free helper regressions run
 with the ordinary Node test suite.
+
+### Tests against the standalone simulator
+
+The tests are moving off the embedded `B2Simulator` onto the standalone
+[b2-simulator](https://github.com/backblaze-labs/b2-simulator) server, which
+speaks the B2 native API over real HTTP on loopback. Migrated files import
+`makeRemoteClient` / `resetRemoteSimulator` from
+`src/test-utils/remote-simulator.ts`; the others still use the embedded
+simulator until they are migrated.
+
+**Getting the server.** The tests use one pinned b2-simulator commit
+(`SIMULATOR_PIN` in `scripts/b2-simulator/pin.mjs`). Fetch it once:
+
+```bash
+pnpm run simulator:fetch     # shallow-fetches the pinned commit into node_modules/.cache/b2-simulator/<sha>
+```
+
+The script checks that the checkout's `HEAD` is exactly the pinned commit. To
+use a local b2-simulator checkout instead (for example while changing the
+simulator), set `B2SIM_DIR=/path/to/b2-simulator`; nothing is fetched then.
+The b2-simulator repository is private: the fetch uses your git credentials.
+CI does not run the fetch; `.github/actions/b2-simulator` checks out the pinned
+commit with a read-only deploy key (the `SIMULATOR_DEPLOY_KEY` secret), checks
+its revision and passes its path to the test steps as `B2SIM_DIR`. Pull
+requests from forks get no secrets, so CI refuses them with a message; push the
+branch to this repository instead. `release.yml` checks out the same commit
+before it checks out the release commit. To move the pin, change
+`SIMULATOR_PIN` and the `ref` in `release.yml` together (a test checks that
+they match). Tests never fetch anything; without the server they fail with a
+message that names this command.
+
+**Running.** Nothing else changes: `pnpm test`, `pnpm test:slow`,
+`pnpm test:coverage`, `pnpm test:browser` and `bun test src/` all run migrated
+files. Each test process (each Vitest worker, the Bun process) starts its own
+server on first use (`--control --profile ts-sdk`, about 0.1 s), so files that
+run at the same time never share one; every `makeRemoteClient` /
+`resetRemoteSimulator` call resets that server (`POST /reset`) with the test's
+options. The server exits with the test process, even when that process is
+killed. In browser mode the page cannot reach the server directly (no CORS,
+and the control plane refuses requests with an `Origin`), so requests travel
+through Vitest browser commands (`src/test-utils/remote-simulator-commands.ts`)
+to one server per browser session and test file.
+
+**Migrating a test file.** Change only how the simulator is created and
+driven, never an assertion:
+
+1. Imports: `makeClient` becomes `makeRemoteClient`, and `new B2Simulator(opts)`
+   becomes `await resetRemoteSimulator(opts)`, both from
+   `./test-utils/remote-simulator.ts`. Drop the `B2Simulator` import.
+2. `makeClient(x)` becomes `await makeRemoteClient(x)` with the same argument
+   (`simOpts` or `{ sim, client }`); make the enclosing function `async`.
+3. A hand-built `new B2Client({ ..., transport })` whose transport is
+   `sim.transport()` or wraps it needs `realm: sim.realm`. Recording and
+   failing wrappers around `sim.transport()` keep working. Without the realm
+   the client would go to production; the transport refuses that.
+4. Control calls are async: `await sim.injectFailure(spec)` (its handle's
+   `clear()` is async too), `await sim.clearFaults()`,
+   `await sim.advanceTime(ms)`, `await sim.expireUploadToken(token)`,
+   `await sim.invalidateUploadToken(token)`, `await sim.flushHooks()`.
+5. `injectFailure`'s `on` must be a full endpoint name such as
+   `b2_upload_part`, not a URL fragment such as `'b2_upload_part?fileId='`;
+   only the status/code pairs the server allows are accepted. `advanceTime`
+   takes a positive integer (the standalone clock never rewinds).
+6. One simulator per test: each `makeRemoteClient` / `resetRemoteSimulator`
+   call empties the server, so a second call in the same test wipes the first
+   one's buckets and tokens, and the older handle throws when used. Do not use
+   `describe.concurrent` / `it.concurrent` in a migrated file.
+7. The options `onWebhookDeliver`, `onReplicate`, `onHookError`,
+   `partnerGroupsCapabilities` and `partnerBackupCapabilities`, and anything
+   that reads the embedded simulator's internals, have no standalone
+   equivalent: leave that test on the embedded simulator and record it. The
+   harness uses the global `fetch`, so a test that replaces `globalThis.fetch`
+   must restore it before it calls the simulator.
+8. Run the file in Node, one browser and Bun, for example
+   `pnpm exec vitest run src/x.test.ts`,
+   `VITEST_BROWSER_INSTANCE=chromium pnpm exec vitest run --config vitest.browser.config.ts src/x.test.ts`
+   and `bun test src/x.test.ts`.
+9. If a test fails only against the standalone server, do not edit its
+   assertion: record the file, the test, the embedded behavior and the
+   standalone behavior in the PR (and on the tracking issue), and leave it
+   failing or on the embedded simulator. Requests now take real time, so a
+   test that synchronizes on "request sent" can observe a different order of
+   responses than the in-process simulator ever produced.
 
 ### Test file naming convention
 

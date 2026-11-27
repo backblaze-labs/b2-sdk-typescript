@@ -8,10 +8,10 @@ import {
   daysFromNow,
   deferred,
   jsonResponse,
-  makeClient,
   readStream,
   recordingTransport,
 } from './test-utils/index.ts'
+import { makeRemoteClient, resetRemoteSimulator } from './test-utils/remote-simulator.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import { SSE_B2 } from './types/encryption.ts'
@@ -28,7 +28,7 @@ describe('B2Client with simulator', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -39,19 +39,22 @@ describe('B2Client with simulator', () => {
   })
 
   it('reauthorizes and retries after an expired auth token', async () => {
-    const { client: expiringClient, sim } = makeClient({
+    const { client: expiringClient, sim } = await makeRemoteClient({
       sim: { strictAuth: true, authTokenTtlMs: 1000 },
     })
     await expiringClient.authorize()
     const originalToken = expiringClient.accountInfo.getAuthToken()
 
-    sim.advanceTime(2000)
+    await sim.advanceTime(2000)
 
     await expect(expiringClient.listBuckets()).resolves.toEqual([])
     expect(expiringClient.accountInfo.getAuthToken()).not.toBe(originalToken)
   })
 
   it('collapses concurrent expired-token reauthorization into one authorize call', async () => {
+    // Stays on the embedded simulator: over real HTTP a stale-token 401 can
+    // arrive after the refresh settled, and ReauthCoalescer then starts a second
+    // authorize. Move it once that SDK behavior is fixed (issue #466).
     const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
     const inner = sim.transport()
     let authorizeCount = 0
@@ -110,7 +113,7 @@ describe('B2Client with simulator', () => {
   })
 
   it('keeps previous auth when concurrent reauthorization waiters abort', async () => {
-    const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
+    const sim = await resetRemoteSimulator({ strictAuth: true, authTokenTtlMs: 1000 })
     const inner = sim.transport()
     let authorizeCount = 0
     const reauthStarted = deferred<void>()
@@ -118,6 +121,7 @@ describe('B2Client with simulator', () => {
     const abortingClient = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: {
         async send(request) {
           if (apiEndpointName(request) === 'b2_authorize_account') {
@@ -148,7 +152,7 @@ describe('B2Client with simulator', () => {
 
     await abortingClient.authorize()
     const originalToken = abortingClient.accountInfo.getAuthToken()
-    sim.advanceTime(2000)
+    await sim.advanceTime(2000)
 
     const firstController = new AbortController()
     const secondController = new AbortController()
@@ -173,6 +177,9 @@ describe('B2Client with simulator', () => {
   })
 
   it('lets late storage requests join in-flight reauthorization', async () => {
+    // Stays on the embedded simulator: over real HTTP a stale-token 401 can
+    // arrive after the refresh settled, and ReauthCoalescer then starts a second
+    // authorize. Move it once that SDK behavior is fixed (issue #466).
     const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
     const inner = sim.transport()
     let authorizeCount = 0
@@ -290,12 +297,13 @@ describe('B2Client with simulator', () => {
   })
 
   it('does not let runtime accountId or bucketId override trusted bucket requests', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     const bucketRequests: Record<string, unknown>[] = []
     const scopedClient = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: {
         async send(req) {
           if (req.url.includes('b2_create_bucket') || req.url.includes('b2_update_bucket')) {
@@ -382,13 +390,14 @@ describe('B2Client with simulator', () => {
   })
 
   it('falls back to an unfiltered bucket list when filtered getBucket misses', async () => {
-    const sim = new B2Simulator()
+    const sim = await resetRemoteSimulator()
     const inner = sim.transport()
     let filteredListCalls = 0
     let unfilteredListCalls = 0
     const fallbackClient = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: {
         async send(req) {
           if (req.url.includes('b2_list_buckets')) {
@@ -499,11 +508,12 @@ describe('B2Client SSRF guard', () => {
     expect(seenUrls).toEqual([])
   })
 
-  it('exposes urlGuard=null when a custom transport is supplied (user owns hardening)', () => {
-    const sim = new B2Simulator()
+  it('exposes urlGuard=null when a custom transport is supplied (user owns hardening)', async () => {
+    const sim = await resetRemoteSimulator()
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: sim.realm,
       transport: sim.transport(),
     })
     expect(client.urlGuard).toBeNull()
@@ -729,7 +739,7 @@ describe('downloads', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -797,7 +807,7 @@ describe('file operations', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1175,7 +1185,7 @@ describe('list file versions', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1228,7 +1238,7 @@ describe('update bucket', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1267,7 +1277,7 @@ describe('large file operations', () => {
     // the simulator's spec-compliant part-size enforcement
     // (`b2_finish_large_file` rejects non-last parts below
     // `absoluteMinimumPartSize`). Production simulator default is 5MB.
-    ;({ client } = makeClient({ minimumPartSize: 1024 }))
+    ;({ client } = await makeRemoteClient({ minimumPartSize: 1024 }))
     await client.authorize()
   })
 
@@ -1449,7 +1459,7 @@ describe('Bucket large-file high-level helpers', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1501,7 +1511,7 @@ describe('download authorization', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1524,7 +1534,7 @@ describe('listing with prefix and pagination', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1608,7 +1618,7 @@ describe('file versioning', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1657,7 +1667,7 @@ describe('key management', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1752,7 +1762,7 @@ describe('notification rules', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1847,7 +1857,7 @@ describe('file retention and legal hold', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1972,7 +1982,7 @@ describe('B2Client.hasCapabilities', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -1996,11 +2006,13 @@ describe('B2Client.hasCapabilities', () => {
     expect(client.hasCapabilities([])).toEqual({ ok: true, missing: [] })
   })
 
-  it('throws if called before authorize', () => {
+  it('throws if called before authorize', async () => {
+    const sim = await resetRemoteSimulator()
     const unauth = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
-      transport: new B2Simulator().transport(),
+      realm: sim.realm,
+      transport: sim.transport(),
     })
     expect(() => unauth.hasCapabilities([Capability.ListBuckets])).toThrow(/Not authorized/)
   })
@@ -2010,7 +2022,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 

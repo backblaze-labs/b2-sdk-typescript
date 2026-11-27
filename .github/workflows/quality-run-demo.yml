@@ -259,6 +259,14 @@ jobs:
         # must never run for an untrusted PR — gated on `trusted`, not only on the token.
         if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
         run: corepack enable && pnpm install --frozen-lockfile
+      # The suites QK runs include files that use the standalone b2-simulator;
+      # check out the pinned commit (same trust gate) and pass its path below.
+      - name: Check out the pinned b2-simulator
+        id: simulator
+        if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
+        uses: ./.github/actions/b2-simulator
+        with:
+          ssh-key: ${{ secrets.SIMULATOR_DEPLOY_KEY }}
 
       - name: Set up Python
         if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
@@ -289,6 +297,7 @@ jobs:
         if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
         env:
           FULL_NAME: ${{ github.repository }}
+          B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
         shell: bash
         run: |
           set -euo pipefail

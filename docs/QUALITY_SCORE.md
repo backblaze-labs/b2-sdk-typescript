@@ -18,7 +18,7 @@ Grades: **A** solid, well-tested, few surprises · **B** good, some edges untest
 
 ## Repo-wide gates (enforced in CI)
 
-- Coverage floor: **97% statements · 98% lines · 97% functions · 92% branches**
+- Coverage floor: **97% statements · 98% lines · 97% functions · 92% branches** for the SDK; the embedded `src/simulator/` has a separate gate set lower than the SDK's for statements, lines and branches
   (`vitest.coverage.config.ts`).
 - `pnpm lint` is `--error-on-warnings`; `pnpm docs` treats TypeDoc warnings as errors.
 - Suite runs on Node 22/24 (Linux/Windows/macOS), Bun (`bun test src/`), and real

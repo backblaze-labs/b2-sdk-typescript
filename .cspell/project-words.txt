@@ -483,6 +483,7 @@ ergonomic
 graceful
 gracefully
 greppable
+gpgsign
 hashable
 idempotent
 imperative

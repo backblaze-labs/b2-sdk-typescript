@@ -102,6 +102,27 @@ jobs:
     env:
       REF: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.tag, 'refs/tags/') && inputs.tag || format('refs/tags/{0}', inputs.tag)) || github.ref }}
     steps:
+      # `pnpm test` runs files against the standalone b2-simulator, a private
+      # repository read with a read-only deploy key. The key is used here, before
+      # the release commit is checked out, so no code from that commit runs while
+      # the key is in reach. The commit repeats SIMULATOR_PIN in
+      # scripts/b2-simulator/pin.mjs (a test keeps the two equal) and is checked
+      # against it below. The checkout moves out of the workspace because the
+      # release checkout empties the workspace.
+      - name: Check out the pinned b2-simulator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: backblaze-labs/b2-simulator
+          ref: 4052c6f8f45350486460d19bc796866cbdcdd3bc
+          ssh-key: ${{ secrets.SIMULATOR_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .b2-simulator
+      - name: Move the b2-simulator out of the workspace
+        id: simulator
+        run: |
+          mv "$GITHUB_WORKSPACE/.b2-simulator" "$RUNNER_TEMP/b2-simulator"
+          echo "dir=$RUNNER_TEMP/b2-simulator" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -136,7 +157,20 @@ jobs:
       # an unverified state can't publish a broken build.
       - run: pnpm lint
       - run: pnpm typecheck
+      - name: Verify the b2-simulator revision
+        env:
+          B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
+        run: |
+          checked_out="$(git -C "$B2SIM_DIR" rev-parse HEAD)"
+          pinned="$(node scripts/b2-simulator/pin.mjs)"
+          if [ "$checked_out" != "$pinned" ]; then
+            echo "::error::This workflow checked out b2-simulator $checked_out, but the release commit's scripts/b2-simulator/pin.mjs pins $pinned. The workflow file and the tag disagree, which happens when a tag made before a pin bump is dispatched from another ref; dispatch the workflow from the tag itself."
+            exit 1
+          fi
+          test -z "$(git -C "$B2SIM_DIR" status --short)"
       - run: pnpm test
+        env:
+          B2SIM_DIR: ${{ steps.simulator.outputs.dir }}
       - name: Build release artifact
         run: pnpm run build:release
       - name: Assert release User-Agent channel

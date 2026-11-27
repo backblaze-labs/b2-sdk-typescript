@@ -6,7 +6,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { B2Client } from './client.ts'
 import { BufferSource } from './streams/source.ts'
-import { makeClient, readStream } from './test-utils/index.ts'
+import { readStream } from './test-utils/index.ts'
+import { makeRemoteClient } from './test-utils/remote-simulator.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import { EncryptionKey } from './types/encryption.ts'
@@ -19,7 +20,7 @@ describe('B2Object coverage', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -115,7 +116,7 @@ describe('B2Client high-level key management', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -267,7 +268,7 @@ describe('B2Client listBuckets with filter options', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -307,7 +308,7 @@ describe('Bucket coverage', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -539,7 +540,7 @@ describe('B2Object download and stream coverage', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = await makeRemoteClient())
     await client.authorize()
   })
 
@@ -638,7 +639,7 @@ describe('B2Object download and stream coverage', () => {
     // via `vi.spyOn` — that mock-coupled to an internal API surface.
     // The simulator's `B2SimulatorOptions.recommendedPartSize` is the
     // documented test seam for exactly this case.
-    const { client: largeRouteClient } = makeClient({
+    const { client: largeRouteClient } = await makeRemoteClient({
       minimumPartSize: 10,
       recommendedPartSize: 10,
     })
