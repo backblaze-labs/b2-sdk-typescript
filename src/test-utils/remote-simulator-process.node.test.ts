@@ -61,7 +61,11 @@ describe('resolveServeScript (where the pinned simulator comes from)', () => {
     // The release build cannot read pin.mjs before it checks out the release
     // commit (the deploy key is used only before that checkout), so the commit is
     // repeated there; this keeps the copy in step with the pin.
-    const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8')
+    // Windows checkouts may have CRLF line endings.
+    const workflow = readFileSync(
+      join(repoRoot, '.github', 'workflows', 'release.yml'),
+      'utf8',
+    ).replaceAll('\r\n', '\n')
     const build = workflow.slice(workflow.indexOf('\n  build:\n'))
     const simulator = build.indexOf('repository: backblaze-labs/b2-simulator')
     const release = build.indexOf(`ref: \${{ github.sha }}`)
@@ -149,7 +153,8 @@ describe('startSimulatorProcess', () => {
     // A worker killed with SIGKILL runs no exit handler; the launcher must notice its
     // stdin closing and take the server down with it.
     const serveScript = resolveServeScript({ repoRoot, env: process.env })
-    const harness = fileURLToPath(new URL('./remote-simulator-process.ts', import.meta.url))
+    // A URL, not a path: import() reads a Windows path's drive letter as a scheme.
+    const harness = new URL('./remote-simulator-process.ts', import.meta.url).href
     const parent = spawn(
       nodeExecutable(),
       [
