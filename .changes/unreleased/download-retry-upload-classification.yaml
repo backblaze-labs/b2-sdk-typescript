@@ -1,3 +1,0 @@
-kind: Fixed
-body: "Download requests with file names resembling upload endpoints retain normal retry behavior."
-time: 2026-11-21T00:00:00Z

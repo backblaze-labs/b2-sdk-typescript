@@ -1,3 +1,0 @@
-kind: Fixed
-body: "Upload streams preserve retained chunk bytes when callers reuse or overwrite source buffers between writes or reads."
-time: 2026-11-25T00:00:00Z

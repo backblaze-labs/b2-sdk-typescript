@@ -1,3 +1,0 @@
-kind: Fixed
-body: Single-file write streams honor the client connection-fault retry setting and per-call overrides.
-time: 2026-11-26T14:40:39.703041-06:00

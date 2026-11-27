@@ -1,3 +1,0 @@
-kind: Fixed
-body: "The backup CLI example associates its local manifest with the bucket and prefix, preserves backups across API endpoint changes, and verifies copied or legacy remote manifests against the destination before skipping files."
-time: 2026-11-20T00:00:00Z

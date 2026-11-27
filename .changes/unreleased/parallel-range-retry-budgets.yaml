@@ -1,3 +1,0 @@
-kind: Fixed
-body: "Parallel ranged downloads track request-transport and body-reset retries with independent budgets, so a retryable failure of one kind no longer consumes the other kind's retry allowance."
-time: 2026-11-20T00:00:00Z
