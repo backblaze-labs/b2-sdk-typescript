@@ -169,8 +169,9 @@ jobs:
         with:
           node-version: 22.22.2
           cache: pnpm
-      - name: Install Bun
-        run: npm install --global bun@latest
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
       - run: pnpm install --frozen-lockfile
       # Bun runs every `*.test.ts` (including `*.slow.test.ts`). The slow
       # multipart tests need a generous timeout — Bun's default 5 s isn't
